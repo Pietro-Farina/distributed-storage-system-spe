@@ -67,14 +67,14 @@ public class LogModels {
         public final String operation;      // Operation type (READ or WRITE) TODO: define type
         public final Integer key;            // Targeted data key
         public final Integer chosenVersion;  // Final version written/read
-        public final boolean success;       // True if quorum succeeded
-        public final long latencyMs;        // End-to-end latency for the operation
+        public final Boolean success;       // True if quorum succeeded
+        public final Long latencyMs;        // End-to-end latency for the operation
         public final String owners;         // List of replica nodes containing the key
         public final int N; public final int R; public final int W; public final int T;
 
         public Summary(String tsStart, String tsEnd, String reqId,
                        String coordinator, String operation, Integer key,
-                       Integer chosenVersion, boolean success, long latencyMs,
+                       Integer chosenVersion, Boolean success, Long latencyMs,
                        String owners, int N, int R, int W, int T) {
             this.tsStart = tsStart;
             this.tsEnd = tsEnd;

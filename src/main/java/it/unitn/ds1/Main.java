@@ -26,11 +26,10 @@ public class Main {
         System.out.printf(
                 "N=%d R=%d W=%d T=%dms | keySpace=%d | delay=[%d..%d]ms | runsDir=%s | tag=%s eventDetail=%s summaryEnabled=%s logToConsole=%s%n",
                 cfg.replication.N, cfg.replication.R, cfg.replication.W, cfg.replication.T,
-                cfg.ring.keySpace, cfg.delays.perUnicastMsMin, cfg.delays.perUnicastMsMax,
+                cfg.ring.keySpace, cfg.delays.delayMinMs, cfg.delays.delayMaxMs,
                 cfg.paths.runsDir, cfg.log.runTag, cfg.log.eventDetail, cfg.log.summaryEnabled, cfg.log.logToConsole
         );
 
-        // TODO CHOOSE A TYPE, there are some inconsistency between the different LogModels LogConfig and ApplicationConf
         // Initialize logger in (main or SimulationRunner)
         var loggerCfg = new LoggerConfig.Builder()
                 .runTag(cfg.log.runTag)

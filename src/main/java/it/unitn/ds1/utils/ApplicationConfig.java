@@ -49,7 +49,7 @@ public class ApplicationConfig {
         if (replication.W * 2 <= replication.N)
             System.err.println("[WARN] W must be > N/2 to avoid write/write conflicts");
 
-        if (delays.perUnicastMsMin < 0 || delays.perUnicastMsMax < delays.perUnicastMsMin)
+        if (delays.delayMinMs < 0 || delays.delayMaxMs < delays.delayMinMs)
             throw new IllegalArgumentException("Invalid delay range");
 
         if (ring.keySpace <= 0) throw new IllegalArgumentException("keySpace must be > 0");
@@ -60,26 +60,25 @@ public class ApplicationConfig {
 
     // ------- nested sections --------
     public static final class Replication {
-        public final int N, R, W;
-        public final long T;
+        public final int N, R, W, T;
 
-        private Replication(int n, int r, int w, long t) {
+        private Replication(int n, int r, int w, int t) {
             this.N = n; this.R = r; this.W = w; this.T = t;
         }
         public static Replication from(Config c) {
             int n = c.getInt("N");
             int r = c.getInt("R");
             int w = c.getInt("W");
-            long t = c.getLong("T_ms");
+            int t = c.getInt("T_ms");
             return new Replication(n, r, w, t);
         }
     }
 
     public static final class Delays {
-        public final int perUnicastMsMin, perUnicastMsMax;
-        private Delays(int min, int max) { this.perUnicastMsMin = min; this.perUnicastMsMax = max; }
+        public final long delayMinMs, delayMaxMs;
+        private Delays(long min, long max) { this.delayMinMs = min; this.delayMaxMs = max; }
         public static Delays from(Config c) {
-            return new Delays(c.getInt("perUnicastMsMin"), c.getInt("perUnicastMsMax"));
+            return new Delays(c.getLong("delayMinMs"), c.getLong("delayMaxMs"));
         }
     }
 

@@ -38,7 +38,6 @@ public class AsyncRunLogger implements AutoCloseable {
 
     private volatile long lastFlushNanos = System.nanoTime();
     private final List<String> batch = new ArrayList<>(2048);
-    private final Object flushLock = new Object();
 
     /**
      * Creates the per-run folder and files, open a thread to run the AsyncLogger
