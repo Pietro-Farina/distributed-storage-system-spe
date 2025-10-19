@@ -354,7 +354,7 @@ public class TwoPhaseCommit {
       String reqId = "1";
       String selfNodeId = "2";
       String runId = "runId";
-      String nodeId = "nodeId";
+      String nodeId = "coordinatorId";
       String operation = "operation";
       Integer key = 1;
       Integer version = 2;

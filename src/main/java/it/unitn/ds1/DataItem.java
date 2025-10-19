@@ -1,10 +1,12 @@
 package it.unitn.ds1;
 
-public class DataItem {
-    private String value;
-    private Integer version;
+import java.io.Serializable;
 
-    public DataItem(String value, Integer version) {
+public class DataItem implements Serializable {
+    private final String value;
+    private final int version;
+
+    public DataItem(String value, int version) {
         this.value = value;
         this.version = version;
     }
@@ -16,10 +18,8 @@ public class DataItem {
         return version;
     }
 
-    public void setValue(String value) {
-        this.value = value;
-    }
-    public void setVersion(Integer version) {
-        this.version = version;
+    @Override
+    public String toString() {
+        return "DataItem{" + "value=" + value + ", version=" + version + '}';
     }
 }

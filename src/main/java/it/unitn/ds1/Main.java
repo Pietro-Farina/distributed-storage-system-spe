@@ -8,6 +8,7 @@ import it.unitn.ds1.actors.Node;
 import it.unitn.ds1.logging.AsyncRunLogger;
 import it.unitn.ds1.logging.LogModels;
 import it.unitn.ds1.logging.LoggerConfig;
+import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.utils.ApplicationConfig;
 
 import java.util.TreeMap;
