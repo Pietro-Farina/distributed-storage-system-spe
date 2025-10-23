@@ -3,6 +3,7 @@ package it.unitn.ds1.actors;
 import akka.actor.AbstractActor;
 import akka.actor.Props;
 import it.unitn.ds1.protocol.Messages;
+import it.unitn.ds1.utils.ApplicationConfig;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -13,6 +14,7 @@ import java.util.Deque;
     read and write operations
  */
 public class Client extends AbstractActor {
+    ApplicationConfig.Delays delaysParameters;
     private int opCounter;
     private boolean busy;
 
@@ -21,14 +23,15 @@ public class Client extends AbstractActor {
     // When the client finishes a task it checks if other are available
     private final Deque<Object> pending;
 
-    public Client() {
+    public Client(ApplicationConfig.Delays delaysParameters) {
+        this.delaysParameters = delaysParameters;
         opCounter = 0;
         busy = false;
         pending = new ArrayDeque<>();
     }
 
-    static public Props props(){
-        return Props.create(Client.class, Client::new);
+    static public Props props(ApplicationConfig.Delays delaysParameters) {
+        return Props.create(Client.class, () -> new Client(delaysParameters));
     }
 
     /**
@@ -40,7 +43,7 @@ public class Client extends AbstractActor {
         if (busy) {
             // console log error
             System.out.printf(
-                    "[Client %s] ❌ Operation not started: %s%n",
+                    "[Client %s] Operation not started: %s%n",
                     getSelf().path().name(), "CLIENT BUSY"
             );
             return;
@@ -67,7 +70,7 @@ public class Client extends AbstractActor {
         if (busy) {
             // console log error
             System.out.printf(
-                    "[Client %s] ❌ Operation not started: %s%n",
+                    "[Client %s] Operation not started: %s%n",
                     getSelf().path().name(), "CLIENT BUSY"
             );
             return;

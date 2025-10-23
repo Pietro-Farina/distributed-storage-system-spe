@@ -4,6 +4,7 @@ import akka.actor.*;
 import it.unitn.ds1.DataItem;
 import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.protocol.Operation;
+import it.unitn.ds1.utils.ApplicationConfig;
 import it.unitn.ds1.utils.OperationUid;
 import scala.concurrent.duration.Duration;
 
@@ -13,6 +14,9 @@ import java.util.concurrent.TimeUnit;
 
 public class Node extends AbstractActor {
 //    private final ActorRef networkManager;
+    // --------- PARAMETERS FOR QUORUM AND DELAYS OF THE NETWORK ---------
+    private final ApplicationConfig.Replication replicationParameters;
+    private final ApplicationConfig.Delays delaysParameters;
 
     // The network ring <nodeKey, ActorRef>
     private final NavigableMap<Integer, ActorRef> network;
@@ -33,12 +37,14 @@ public class Node extends AbstractActor {
     private final Map<OperationUid, Cancellable> lockTimers;
 
     public Node(
-//            ActorRef networkManager,
-            int id){
-//        this.networkManager = networkManager;
-        this.network = new TreeMap<>();
+            int id,
+            ApplicationConfig.Replication replicationParameters,
+            ApplicationConfig.Delays delaysParameters){
         this.id = id;
+        this.replicationParameters = replicationParameters;
+        this.delaysParameters = delaysParameters;
 
+        this.network = new TreeMap<>();
         this.storage = new TreeMap<>();
         this.storageLocks = new HashSet<>();
         this.coordinatorOperations = new HashMap<>();
@@ -48,11 +54,9 @@ public class Node extends AbstractActor {
     }
 
     static public Props props(
-//            ActorRef networkManager,
-            int id){
+            int id, ApplicationConfig.Replication replicationParameters, ApplicationConfig.Delays delaysParameters) {
         return Props.create(Node.class, () -> new Node(
-//                networkManager,
-                id));
+                id, replicationParameters, delaysParameters));
     }
 
     private void onJoinNetworkMsg(Messages.JoinNetworkMsg joinNetworkMsg) {
@@ -145,12 +149,11 @@ public class Node extends AbstractActor {
         // check the nodes responsible for the request
         Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(dataKey);
 
-        int W = 2, T = 1000; // TODO get replication params from config
         OperationUid operationUid = nextOperationUid();
         Operation operation = new Operation(
                 dataKey,
                 responsibleNodesKeys,
-                W,
+                replicationParameters.W,
                 getSender(),
                 "UPDATE",
                 value,
@@ -179,7 +182,7 @@ public class Node extends AbstractActor {
         multicastMessage(responsibleNodesKeys, requestMsg);
 
         // Start the timer
-        operation.timer = scheduleTimeout(T, operationUid, dataKey);
+        operation.timer = scheduleTimeout(replicationParameters.T, operationUid, dataKey);
     }
 
     // TODO write reason why we include the senderId when texting Coord -> avoid O(n) to getNodeKey()
@@ -210,10 +213,9 @@ public class Node extends AbstractActor {
         coordinator.tell(responseMsg, self());
 
         // setup Timeout for the request
-        int T = 1000; // TODO get replication params from config
         lockTimers.put(
                 updateRequestMsg.operationUid,
-                scheduleTimeout(T, updateRequestMsg.operationUid, dataKey)
+                scheduleTimeout(replicationParameters.T, updateRequestMsg.operationUid, dataKey)
         );
     }
 
@@ -262,12 +264,11 @@ public class Node extends AbstractActor {
             getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY"), self());
         }
         Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(dataKey);
-        int R = 2, T = 1000; // TODO get replication params from config
         OperationUid operationUid = nextOperationUid();
         Operation operation = new Operation(
                 dataKey,
                 responsibleNodesKeys,
-                R,
+                replicationParameters.R,
                 getSender(),
                 "GET",
                 null,
@@ -309,7 +310,7 @@ public class Node extends AbstractActor {
         multicastMessage(responsibleNodesKeys, requestMsg);
 
         // Start the timer
-        operation.timer = scheduleTimeout(T, operationUid, dataKey);
+        operation.timer = scheduleTimeout(replicationParameters.T, operationUid, dataKey);
 
     }
 
@@ -446,11 +447,10 @@ public class Node extends AbstractActor {
     }
 
     private Set<Integer> getResponsibleNodesKeys(int dataKey){
-        // TODO move N to the parameters of the function
-        int N = 3;
+        int N;
         if (network.isEmpty()) return Set.of();
         int size = network.size();
-        N = Math.min(size, N);
+        N = Math.min(size, replicationParameters.N);
 
         Set<Integer> responsibleNodesKeys = new HashSet<>();
 
