@@ -150,15 +150,143 @@ public class Messages {
     }
 
     public static class GetResultMsg implements Serializable {
-        public final int clientOperationNumber;
+        public final OperationUid operationUid;
         public final int dataKey;
         public final DataItem value;
 
-        public GetResultMsg(int clientOperationNumber,
+        public GetResultMsg(OperationUid operationUid,
                             int dataKey, DataItem value) {
-            this.clientOperationNumber = clientOperationNumber;
+            this.operationUid = operationUid;
             this.dataKey = dataKey;
             this.value = value;
+        }
+    }
+
+    public static class StartJoinMsg implements Serializable {
+        public final int newNodeKey;
+        public final ActorRef bootstrapNode;
+
+        public StartJoinMsg(int newNodeKey, ActorRef bootstrapNode) {
+            this.newNodeKey = newNodeKey;
+            this.bootstrapNode = bootstrapNode;
+        }
+    }
+
+    public static class BootstrapRequestMsg implements Serializable {
+        public final OperationUid joiningOperationUid;
+
+        public BootstrapRequestMsg(OperationUid joiningOperationUid) {
+            this.joiningOperationUid = joiningOperationUid;
+        }
+    }
+
+    public static class BootstrapResponseMsg implements Serializable {
+        public final OperationUid joiningOperationUid;
+        public final NavigableMap<Integer, ActorRef> network;
+
+        public BootstrapResponseMsg(OperationUid joiningOperationUid, NavigableMap<Integer, ActorRef> network) {
+            this.joiningOperationUid = joiningOperationUid;
+            this.network = Collections.unmodifiableNavigableMap(new TreeMap<>(Optional.ofNullable(network).orElseGet(TreeMap::new)));
+        }
+    }
+
+    public static class RequestDataMsg implements Serializable {
+        public final OperationUid joiningOperationUid;
+        public final int newNodeKey;
+        public final boolean isRecover;
+
+        public RequestDataMsg(OperationUid joiningOperationUid, int newNodeKey, boolean isRecover) {
+            this.joiningOperationUid = joiningOperationUid;
+            this.newNodeKey = newNodeKey;
+            this.isRecover = isRecover;
+        }
+    }
+
+    public static class ResponseDataMsg implements Serializable {
+        public final OperationUid joiningOperationUid;
+        public final Map<Integer, DataItem> requestedData;
+        public final int senderKey;
+
+        public ResponseDataMsg(OperationUid joiningOperationUid, Map<Integer, DataItem> requestedData, int senderKey) {
+            this.joiningOperationUid = joiningOperationUid;
+            this.requestedData = Collections.unmodifiableMap(new TreeMap<>(Optional.ofNullable(requestedData).orElseGet(Map::of)));
+            this.senderKey = senderKey;
+        }
+    }
+
+    public static class ReadDataRequestMsg implements Serializable {
+        public final OperationUid joiningOperationUid;
+        public final List<KeyOperationRef> requestedData;
+
+        public ReadDataRequestMsg(OperationUid joiningOperationUid, List<KeyOperationRef> requestedData) {
+            this.joiningOperationUid = joiningOperationUid;
+            this.requestedData = Collections.unmodifiableList(new ArrayList<>(Optional.ofNullable(requestedData).orElseGet(List::of)));
+        }
+    }
+
+    public static class ReadDataResponseMsg implements Serializable {
+        public final OperationUid joiningOperationUid;
+        public final List<KeyDataOperationRef> requestedData;
+        public final int senderKey;
+
+        public ReadDataResponseMsg(OperationUid joiningOperationUid, List<KeyDataOperationRef> requestedData, int senderKey) {
+            this.joiningOperationUid = joiningOperationUid;
+            this.requestedData = Collections.unmodifiableList(new ArrayList<>(Optional.ofNullable(requestedData).orElseGet(List::of)));
+            this.senderKey = senderKey;
+        }
+    }
+
+    public static class AnnounceNodeMsg implements Serializable {
+        public final int newNodeKey;
+
+        public AnnounceNodeMsg(int newNodeKey) {
+            this.newNodeKey = newNodeKey;
+        }
+    }
+
+    public static class StartLeaveMsg implements Serializable {
+        public StartLeaveMsg() {}
+    }
+
+    public static class LeaveWarningMsg implements Serializable {
+        public final OperationUid leavingOperationUid;
+        public final Map<Integer, DataItem> dataToSave;
+
+        public LeaveWarningMsg(OperationUid leavingOperationUid, Map<Integer, DataItem> dataToSave) {
+            this.leavingOperationUid = leavingOperationUid;
+            this.dataToSave = Collections.unmodifiableMap(new TreeMap<>(dataToSave));
+        }
+    }
+
+    public static class LeaveAckMsg implements Serializable {
+        public final OperationUid leavingOperationUid;
+        public final int senderKey;
+
+        public LeaveAckMsg(OperationUid leavingOperationUid, int senderKey) {
+            this.leavingOperationUid = leavingOperationUid;
+            this.senderKey = senderKey;
+        }
+    }
+
+    public static class LeaveCommitMsg implements Serializable {
+        public final int leavingNodeKey;
+        public final OperationUid leavingOperationUid;
+
+        public LeaveCommitMsg(int leavingNodeKey, OperationUid leavingOperationUid) {
+            this.leavingNodeKey = leavingNodeKey;
+            this.leavingOperationUid = leavingOperationUid;
+        }
+    }
+
+    public static class CrashMsg implements Serializable {
+        public CrashMsg(){}
+    }
+
+    public static class StartRecoveryMsg implements Serializable {
+        public final ActorRef bootstrapNode;
+
+        public StartRecoveryMsg(ActorRef bootstrapNode) {
+            this.bootstrapNode = bootstrapNode;
         }
     }
 
@@ -172,9 +300,15 @@ public class Messages {
 
     public static class ErrorMsg implements Serializable {
         public final String reason;
+        public final OperationUid operationUid;
+        public final String operationType;
+        public final int dataKey;
 
-        public ErrorMsg(String reason) {
+        public ErrorMsg(String reason, OperationUid operationUid, String operationType, int dataKey) {
             this.reason = reason;
+            this.operationUid = operationUid;
+            this.operationType = operationType;
+            this.dataKey = dataKey;
         }
     }
 

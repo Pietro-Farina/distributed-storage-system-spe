@@ -2,9 +2,13 @@ package it.unitn.ds1.actors;
 
 import akka.actor.AbstractActor;
 import akka.actor.Props;
+import it.unitn.ds1.logging.AsyncRunLogger;
+import it.unitn.ds1.logging.LogModels;
 import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.utils.ApplicationConfig;
+import it.unitn.ds1.utils.OperationUid;
 
+import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
 
@@ -14,7 +18,7 @@ import java.util.Deque;
     read and write operations
  */
 public class Client extends AbstractActor {
-    ApplicationConfig.Delays delaysParameters;
+    private ApplicationConfig.Delays delaysParameters;
     private int opCounter;
     private boolean busy;
 
@@ -23,15 +27,22 @@ public class Client extends AbstractActor {
     // When the client finishes a task it checks if other are available
     private final Deque<Object> pending;
 
-    public Client(ApplicationConfig.Delays delaysParameters) {
+    // ------------- for logging purposes ------------- //
+    private final AsyncRunLogger logger = AsyncRunLogger.get();
+    private long startTime;
+    private final ApplicationConfig.Replication replicationParameters;
+    // ------------------------------------------------ //
+
+    public Client(ApplicationConfig.Delays delaysParameters, ApplicationConfig.Replication replicationParameters) {
         this.delaysParameters = delaysParameters;
+        this.replicationParameters = replicationParameters;
         opCounter = 0;
         busy = false;
         pending = new ArrayDeque<>();
     }
 
-    static public Props props(ApplicationConfig.Delays delaysParameters) {
-        return Props.create(Client.class, () -> new Client(delaysParameters));
+    static public Props props(ApplicationConfig.Delays delaysParameters, ApplicationConfig.Replication replicationParameters) {
+        return Props.create(Client.class, () -> new Client(delaysParameters, replicationParameters));
     }
 
     /**
@@ -48,6 +59,7 @@ public class Client extends AbstractActor {
             );
             return;
         }
+        onStartOperation();
         busy = true;
         opCounter++;
 
@@ -75,6 +87,7 @@ public class Client extends AbstractActor {
             );
             return;
         }
+        onStartOperation();
         busy = true;
         opCounter++;
 
@@ -89,9 +102,10 @@ public class Client extends AbstractActor {
 
     private void onUpdateResultMsg(Messages.UpdateResultMsg updateResultMsg) {
         System.out.printf(
-                "[Client %s] Update completed for key=%d -> value=\"%s\" (new version=%d)%n",
+                "[Client %s] Update completed for dataKey=%d -> value=\"%s\" (new version=%d)%n",
                 getSelf().path().name(), updateResultMsg.dataKey, updateResultMsg.value.getValue(), updateResultMsg.value.getVersion()
         );
+        onEndOperation(updateResultMsg.operationUid,"UPDATE", updateResultMsg.dataKey, true, updateResultMsg.value.getVersion());
         busy = false;
 
         processNextIfIdle();
@@ -99,9 +113,10 @@ public class Client extends AbstractActor {
 
     private void onGetResultMsg(Messages.GetResultMsg getResultMsg) {
         System.out.printf(
-                "[Client %s] Get result: key=%d → value=\"%s\" (version=%d)%n",
+                "[Client %s] Get result: dataKey=%d → value=\"%s\" (version=%d)%n",
                 getSelf().path().name(), getResultMsg.dataKey, getResultMsg.value.getValue(), getResultMsg.value.getVersion()
         );
+        onEndOperation(getResultMsg.operationUid,"GET", getResultMsg.dataKey, true, getResultMsg.value.getVersion());
         busy = false;
 
         processNextIfIdle();
@@ -112,6 +127,7 @@ public class Client extends AbstractActor {
                 "[Client %s] Operation failed: %s%n",
                 getSelf().path().name(), errorMsg.reason
         );
+        onEndOperation(errorMsg.operationUid, errorMsg.operationType, errorMsg.dataKey, false, -1);
         busy = false;
 
         processNextIfIdle();
@@ -158,6 +174,29 @@ public class Client extends AbstractActor {
                     getSelf().path().name(), intent.getClass().getSimpleName());
         }
     }
+
+    // -------------- HELPER FUNCTION FOR LOGGING -------------- //
+    private void onStartOperation() {
+        this.startTime = System.nanoTime();
+    }
+    private void onEndOperation(OperationUid operationUid, String operationType, int dataKey, boolean success, int chosenVersion) {
+        long endTime = System.nanoTime();
+        var s = new LogModels.Summary(
+                Instant.ofEpochMilli(this.startTime/1_000_000).toString(),
+                Instant.ofEpochMilli(endTime/1_000_000).toString(),
+                operationUid.toString(),
+                getSender().path().name(),
+                operationType,
+                dataKey,
+                chosenVersion,
+                success,
+                (endTime - this.startTime) / 1_000_000,
+                "",
+                replicationParameters.N, replicationParameters.R, replicationParameters.W, replicationParameters.T
+        );
+        logger.summary(s);
+    }
+    // --------------------------------------------------------- //
 
 
     // Mapping between the received message types and our actor methods

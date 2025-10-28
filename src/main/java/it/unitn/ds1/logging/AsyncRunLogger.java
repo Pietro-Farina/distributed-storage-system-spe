@@ -44,7 +44,6 @@ public class AsyncRunLogger implements AutoCloseable {
      * @param cfg configuration of logger
      * @param metadata metadata for the run
      * @throws IOException
-     * @implNote TODO move the summary header string to the LogModels class
      */
     private AsyncRunLogger(LoggerConfig cfg, Metadata metadata) throws IOException {
         this.cfg = cfg;

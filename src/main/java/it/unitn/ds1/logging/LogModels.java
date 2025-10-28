@@ -95,6 +95,7 @@ public class LogModels {
                     .append(tsStart).append(',')
                     .append(tsEnd).append(',')
                     .append(csv(reqId)).append(',')
+                    .append(csv(coordinator)).append(',')
                     .append(csv(operation)).append(',')
                     .append(key).append(',')
                     .append(chosenVersion).append(',')

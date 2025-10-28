@@ -2,13 +2,19 @@ package it.unitn.ds1.actors;
 
 import akka.actor.*;
 import it.unitn.ds1.DataItem;
+import it.unitn.ds1.logging.AsyncRunLogger;
+import it.unitn.ds1.logging.LogModels;
+import it.unitn.ds1.protocol.KeyDataOperationRef;
+import it.unitn.ds1.protocol.KeyOperationRef;
 import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.protocol.Operation;
 import it.unitn.ds1.utils.ApplicationConfig;
 import it.unitn.ds1.utils.OperationUid;
 import scala.concurrent.duration.Duration;
 
+import javax.xml.crypto.Data;
 import java.io.Serializable;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
@@ -30,11 +36,19 @@ public class Node extends AbstractActor {
     private int opCounter;
     private final Map<OperationUid, Operation> coordinatorOperations;
 
-    // Coordinator guard for this.key to avoid overlapping prepares from this coordinator
+    // Coordinator guard for this.dataKey to avoid overlapping prepares from this coordinator
     private final Set<Integer> coordinatorGuards;
 
     // To track operations as StorageNode
     private final Map<OperationUid, Cancellable> lockTimers;
+
+    //  To store data from leaving node not yet committed
+    private final Map<OperationUid, Map<Integer, DataItem>> uncertainUpdates;
+
+    // ------------- for logging purposes ------------- //
+    private final AsyncRunLogger logger = AsyncRunLogger.get();
+    private final Map<OperationUid, Long> startTimes;
+    // ------------------------------------------------ //
 
     public Node(
             int id,
@@ -51,6 +65,9 @@ public class Node extends AbstractActor {
         this.coordinatorGuards = new HashSet<>();
         this.opCounter = 0;
         this.lockTimers = new HashMap<>();
+        this.uncertainUpdates = new HashMap<>();
+
+        this.startTimes = new HashMap<>();
     }
 
     static public Props props(
@@ -95,6 +112,11 @@ public class Node extends AbstractActor {
         }
     }
 
+    /**
+     * TODO: What if we timeout and then it arrives? We should accept the data but we might have given the lock to another resource. TIMEOUT should be > round trip time
+     * TODO: What if the timeout time is the start of the timeout
+     * @param updateResultMsg
+     */
     private void onUpdateResultMsg(Messages.UpdateResultMsg updateResultMsg) {
         // Commit the update
         storage.put(updateResultMsg.dataKey, updateResultMsg.value);
@@ -104,7 +126,7 @@ public class Node extends AbstractActor {
 
         // Cancel the timer - to avoid stale timeout
         Cancellable timer = lockTimers.remove(updateResultMsg.operationUid);
-        if (timer != null) { timer.cancel(); } // should always be not null
+        if (timer != null) { timer.cancel(); } // should always be not null?
     }
 
     private void onGetRequestMsg(Messages.GetRequestMsg getRequestMsg) {
@@ -139,17 +161,17 @@ public class Node extends AbstractActor {
     }
 
     private void startUpdateAsCoordinator(int dataKey, String value) {
+        OperationUid operationUid = nextOperationUid();
         // guard at coordinator (optional but recommended)
         // TODO write reasons of guard at coordinator
         if (!acquireCoordinatorGuard(dataKey)) {
-            getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY"), self());
+            getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY", operationUid, "UPDATE", dataKey), self());
             return;
         }
 
         // check the nodes responsible for the request
-        Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(dataKey);
+        Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(network, dataKey, replicationParameters.N);
 
-        OperationUid operationUid = nextOperationUid();
         Operation operation = new Operation(
                 dataKey,
                 responsibleNodesKeys,
@@ -225,7 +247,7 @@ public class Node extends AbstractActor {
         DataItem committedDataItem = new DataItem(operation.proposedValue, chosenVersion);
 
         // local commit if we are a replica
-        Set <Integer> responsibleNodesKeys = getResponsibleNodesKeys(operation.dataKey);
+        Set <Integer> responsibleNodesKeys = getResponsibleNodesKeys(network, operation.dataKey, replicationParameters.N);
         if (responsibleNodesKeys.contains(this.id)) {
             storage.put(operation.dataKey, committedDataItem);
             releaseReplicaLock(operation.dataKey);
@@ -248,23 +270,24 @@ public class Node extends AbstractActor {
         // we will let it timeout TODO: write this reasoning - comparable analysis?
 
         // if we locked locally, we have to release
-        if (getResponsibleNodesKeys(operation.dataKey).contains(this.id)) {
+        if (getResponsibleNodesKeys(network, operation.dataKey, replicationParameters.N).contains(this.id)) {
             releaseReplicaLock(operation.dataKey);
         }
 
         // send the error to the client
-        operation.client.tell(new Messages.ErrorMsg(reason), self());
+        operation.client.tell(new Messages.ErrorMsg(reason, operation.operationUid, "UPDATE", operation.dataKey), self());
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
     }
 
     private void startGetAsCoordinator(int dataKey) {
-        if (!acquireCoordinatorGuard(dataKey)) {
-            getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY"), self());
-        }
-        Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(dataKey);
         OperationUid operationUid = nextOperationUid();
+        if (!acquireCoordinatorGuard(dataKey)) {
+            getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY", operationUid, "GET", dataKey), self());
+            return;
+        }
+        Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(network, dataKey, replicationParameters.N);
         Operation operation = new Operation(
                 dataKey,
                 responsibleNodesKeys,
@@ -281,7 +304,7 @@ public class Node extends AbstractActor {
             if (!acquireReplicaLock(dataKey)) {
                 // Busy locally -> fast fail
                 // TODO write reasons of why reject if busy locally
-                finishUpdateFail(operation, "LOCAL BUSY"); // TODO change to a general Fail
+                finishUpdateFail(operation, "LOCAL BUSY");
                 return;
             }
             // read my value
@@ -349,7 +372,7 @@ public class Node extends AbstractActor {
 
         // reply to client
         Messages.GetResultMsg resultMsg = new Messages.GetResultMsg(
-                -1, operation.dataKey, chosenVersion);
+                operation.operationUid, operation.dataKey, chosenVersion);
         operation.client.tell(resultMsg, self());
 
         // cleanup: free locks and cancel timer
@@ -358,7 +381,7 @@ public class Node extends AbstractActor {
 
     private void finishGetFail(Operation operation, String reason) {
         // send the error to the client
-        operation.client.tell(new Messages.ErrorMsg(reason), self());
+        operation.client.tell(new Messages.ErrorMsg(reason, operation.operationUid, "GET", operation.dataKey), self());
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
@@ -390,8 +413,14 @@ public class Node extends AbstractActor {
 
             if (operation.operationType.equals("UPDATE")) {
                 finishUpdateFail(operation, "TIMEOUT");
-            } else {
+            } else if (operation.operationType.equals("GET")) {
                 finishGetFail(operation, "TIMEOUT");
+            } else if (operation.operationType.equals("JOIN")) {
+                finishJoinFail(operation.operationUid);
+            } else if (operation.operationType.equals("LEAVE")) {
+                finishLeaveFail(operation);
+            } else if (operation.operationType.equals("RECOVER")) {
+                finishRecoverFail(operation.operationUid, "timeout");
             }
 
         } else { // I am a node
@@ -402,12 +431,559 @@ public class Node extends AbstractActor {
             }
             timer.cancel();
             // Free the write lock
-            releaseReplicaLock(timeout.dataKey);
+            if (timeout.dataKey >= 0)
+                releaseReplicaLock(timeout.dataKey);
         }
     }
 
+    /**
+     * Only Joining node handles this
+     * @param startJoinMsg from NetworkManager
+     */
+    private void onStartJoinMsg(Messages.StartJoinMsg startJoinMsg) {
+        // the node is already in the network
+        if (network.containsKey(startJoinMsg.newNodeKey)) {
+            printFailOperation("JOIN", startJoinMsg.newNodeKey, "node already exists");
+            return;
+        }
+        // Wrong ID
+        if (this.id != startJoinMsg.newNodeKey) {
+            printFailOperation("JOIN", startJoinMsg.newNodeKey, "node id ["+ this.id +"] differs from given id");
+            return;
+        }
+        OperationUid operationUid = nextOperationUid();
+        onStartOperation(operationUid);
 
+        // create the operation
+        Operation operation = new Operation(
+                -1,
+                new HashSet<>(),
+                -1,
+                getSender(),
+                "JOIN",
+                null,
+                operationUid
+        );
+        coordinatorOperations.put(operationUid, operation);
 
+        // send the request to the bootstrap node
+        Messages.BootstrapRequestMsg bootstrapRequestMsg = new Messages.BootstrapRequestMsg(
+                operationUid);
+        startJoinMsg.bootstrapNode.tell(bootstrapRequestMsg, self());
+
+        operation.timer = scheduleTimeout(replicationParameters.T, operationUid, -1);
+    }
+
+    /**
+     * Only bootstrap nodes answer this
+     * @param bootstrapRequestMsg from Joining/Recovering Node
+     */
+    private void onBootstrapRequestMsg(Messages.BootstrapRequestMsg bootstrapRequestMsg) {
+        // Sending the node in the network
+        Messages.BootstrapResponseMsg responseMsg = new Messages.BootstrapResponseMsg(
+                bootstrapRequestMsg.joiningOperationUid,
+                this.network
+        );
+        sender().tell(responseMsg, self());
+    }
+
+    /**
+     * Only joining node and recovery node answer this
+     * It could be a stale message
+     * @param bootstrapResponseMsg from Bootstrap Node
+     */
+    private void onBootstrapResponseMsg(Messages.BootstrapResponseMsg bootstrapResponseMsg) {
+        Operation operation =  coordinatorOperations.get(bootstrapResponseMsg.joiningOperationUid);
+        if (operation == null)
+            return; // stale message
+
+        this.network.clear();
+        this.network.putAll(bootstrapResponseMsg.network);
+
+        // Get the following node in the ring
+        final int successorKey = getSuccessorNodeKey(this.id);
+        ActorRef successorNode = network.get(successorKey);
+
+        // Request the node I will have to store to the following node in the ring
+        Messages.RequestDataMsg requestMsg = new Messages.RequestDataMsg(
+                bootstrapResponseMsg.joiningOperationUid,
+                this.id,
+                operation.operationType.equals("RECOVER")
+        );
+        successorNode.tell(requestMsg, self());
+    }
+
+    /**
+     * Any node in the network can receive this request from a Joining Node or a Recovering Node.
+     * @param requestDataMsg from Joining/Recovering Node
+     */
+    private void onRequestDataMsg(Messages.RequestDataMsg requestDataMsg) {
+        // Send only the data the joining node has to store
+        Map<Integer, DataItem> requestedData;
+        if (requestDataMsg.isRecover) {
+            // RECOVER: compute with the CURRENT ring (do NOT add the node)
+            requestedData = computeItemsForNode(requestDataMsg.newNodeKey, network);
+        } else {
+            // JOIN: compute with ring + new node
+            requestedData = computeItemsForJoiner(requestDataMsg.newNodeKey);
+        }
+        Messages.ResponseDataMsg responseMsg = new Messages.ResponseDataMsg(
+                requestDataMsg.joiningOperationUid,
+                requestedData,
+                this.id
+        );
+        sender().tell(responseMsg, self());
+    }
+
+    /**
+     * Only joining or recovering node answer this.
+     * It could be a stale message.
+     * @param responseDataMsg from Successor Node of the Joining/Recovering Node
+     */
+    private void onResponseDataMsg(Messages.ResponseDataMsg responseDataMsg) {
+        Operation operation =  coordinatorOperations.get(responseDataMsg.joiningOperationUid);
+        if (operation == null)
+            return; // stale message
+
+        // We have the check on N == 1 as in startReadingPhase we ping the other nodes in the network and wait for their answer
+        if (replicationParameters.N == 1 || responseDataMsg.requestedData.isEmpty()) {
+            storage.putAll(responseDataMsg.requestedData); // save the possible data in the storage
+            if (operation.operationType.equals("JOIN"))
+                finishJoinSuccess(responseDataMsg.joiningOperationUid); // trivial case
+            else
+                finishRecoverSuccess(responseDataMsg.joiningOperationUid);
+            return;
+        }
+        startReadingPhase(responseDataMsg); // R-quorum on each key
+    }
+
+    /**
+     * Any node in the network can receive this request from a Joining/Recovering Node.
+     * @param readDataRequestMsg from Joining/Recovering Node
+     */
+    private void onReadDataRequestMsg(Messages.ReadDataRequestMsg readDataRequestMsg) {
+        final List <KeyDataOperationRef> requestedData = new ArrayList<>();
+        for (KeyOperationRef ref : readDataRequestMsg.requestedData) {
+            final DataItem item = storage.get(ref.key());
+            requestedData.add(new KeyDataOperationRef(
+                    ref.key(),
+                    item,
+//                    item != null ? item : new DataItem(null, 0),
+                    ref.opId()
+            ));
+        }
+        Messages.ReadDataResponseMsg responseMsg = new Messages.ReadDataResponseMsg(
+                readDataRequestMsg.joiningOperationUid,
+                requestedData,
+                this.id
+        );
+        sender().tell(responseMsg, self());
+    }
+
+    /**
+     * Only Joining/Recovering node answer this.
+     * It could be a stale message.
+     * @param readDataResponseMsg from a Node that contains items which the Joining/Recovering Node has to store
+     */
+    private void onReadDataResponseMsg(Messages.ReadDataResponseMsg readDataResponseMsg) {
+        // Get joining operation
+        final Operation joiningOperation = coordinatorOperations.get(readDataResponseMsg.joiningOperationUid);
+
+        if (joiningOperation == null) {
+            return; // stale message
+        }
+
+        // Get the Data
+        for (KeyDataOperationRef ref : readDataResponseMsg.requestedData) {
+            Operation perKeyReadOp = coordinatorOperations.get(ref.opUid());
+            if (perKeyReadOp == null) {
+                continue; // already reached the quorum for that dataKey
+            }
+
+            if (ref.item() == null) { // We got an invalid Item -> sign it as a BUSY
+                perKeyReadOp.onBusyResponse(readDataResponseMsg.senderKey);
+            } else {
+                perKeyReadOp.onOkResponse(readDataResponseMsg.senderKey, ref.item());
+            }
+
+            if (perKeyReadOp.quorumTracker.done()) {
+                if (perKeyReadOp.quorumTracker.hasQuorum()) {
+                    if (perKeyReadOp.chosenVersion != null) {
+                        DataItem currentItem = storage.get(ref.dataKey());
+
+                        // the version I got might still be smaller than previous
+                        if (currentItem == null || currentItem.getVersion() < perKeyReadOp.chosenVersion.getVersion()) {
+                            storage.put(ref.dataKey(), perKeyReadOp.chosenVersion);
+                        }
+                    }
+                    joiningOperation.quorumTracker.onOk(ref.dataKey());
+                } else {
+                    joiningOperation.quorumTracker.onBusy(ref.dataKey());
+                }
+
+                // This operation is not needed anymore, it can be closed
+                coordinatorOperations.remove(ref.opUid());
+            }
+        }
+
+        if (!joiningOperation.quorumTracker.done()) {
+            return;
+        }
+
+        if (joiningOperation.quorumTracker.hasQuorum()) {
+            if (joiningOperation.operationType.equals("JOIN")) {
+                finishJoinSuccess(readDataResponseMsg.joiningOperationUid);
+            } else {
+                finishRecoverSuccess(readDataResponseMsg.joiningOperationUid);
+            }
+        } else {
+            if (joiningOperation.operationType.equals("JOIN")) {
+                finishJoinFail(readDataResponseMsg.joiningOperationUid);
+            } else {
+                finishRecoverFail(readDataResponseMsg.joiningOperationUid, "per-item read quorum not reached"); // mirror of join fail (stop or retry policy)
+            }
+        }
+    }
+
+    /**
+     * All node in the network will receive it as a node complete the joining operation.
+     * The receiver message needs to drop the items which are no longer in charge.
+     * This is done stupidly the whole network iterate through its data O(storage.size() * network.size())
+     * @param announceNodeMsg from JoiningNode
+     */
+    private void onAnnounceNodeMsg(Messages.AnnounceNodeMsg announceNodeMsg) {
+        network.put(announceNodeMsg.newNodeKey, sender());
+
+        List<Integer> itemsToDrop = computeItemsKeysToDrop();
+        for (Integer key : itemsToDrop) {
+            storage.remove(key);
+        }
+    }
+
+    /**
+     * Start the reading phase of the joining operation.
+     * It creates for each item to store a reading r-quorum operation. If any fails the join fails
+     * It is little expensive -> O(requestedData.size() * network.size()) however we request and receive only the
+     * data we actually need from each node.
+     * @param responseDataMsg from the Successor Node of the Joining Node
+     */
+    private void startReadingPhase(Messages.ResponseDataMsg responseDataMsg) {;
+        final Map<Integer, List<KeyOperationRef>> dataToAskPerNodeKey = new HashMap<>();
+
+        // Update the requirement for the joining Operations
+        // We need to reach r-quorum for each key
+        final Operation joiningOperation = coordinatorOperations.get(responseDataMsg.joiningOperationUid);
+        joiningOperation.quorumTracker.setQuorumRequirements(
+                responseDataMsg.requestedData.keySet(),
+                responseDataMsg.requestedData.size()
+        );
+
+        // Create a per-item quorum
+        for (Map.Entry<Integer, DataItem> item : responseDataMsg.requestedData.entrySet()) {
+            // define the current responsible nodes for holding the key, note the joining node is not the network yet
+            final Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(network, item.getKey(), replicationParameters.N);
+
+            // Create the dedicated operation
+            final OperationUid perKeyReadOpUid = nextOperationUid();
+            final Operation perKeyReadOp = new Operation(
+                    item.getKey(),
+                    responsibleNodesKeys,
+                    replicationParameters.R,
+                    null,
+                    "JOINING-GET",
+                    null,
+                    perKeyReadOpUid
+            );
+            coordinatorOperations.put(perKeyReadOpUid, perKeyReadOp);
+            // We do not start the timer as there is already one for the joining
+
+            // We already have the data of the successor node
+            perKeyReadOp.onOkResponse(responseDataMsg.senderKey, item.getValue());
+
+            // To avoid sending many different message we just send one for each node
+            responsibleNodesKeys.remove(responseDataMsg.senderKey);  // don't ask the sender
+            for (int nodeKey : responsibleNodesKeys) {
+                dataToAskPerNodeKey
+                        .computeIfAbsent(nodeKey, _ -> new ArrayList<>())
+                        .add(new KeyOperationRef(item.getKey(), perKeyReadOpUid));
+            }
+        }
+
+        // Send the messages
+        for (Map.Entry<Integer, List<KeyOperationRef>> item : dataToAskPerNodeKey.entrySet()) {
+            Messages.ReadDataRequestMsg requestMsg = new Messages.ReadDataRequestMsg(
+                    responseDataMsg.joiningOperationUid,
+                    item.getValue()
+            );
+
+            ActorRef node = network.get(item.getKey());
+            node.tell(requestMsg, self());
+        }
+    }
+
+    private void finishJoinSuccess(OperationUid joiningOperationUid) {
+        // I want to save into the storage my most recent data -> Already done when reaching per-item quorum
+        Operation operation = coordinatorOperations.remove(joiningOperationUid);
+        if (operation != null && operation.timer != null)
+            operation.timer.cancel();
+
+        // Multicast Here I am
+        Messages.AnnounceNodeMsg nodeMsg = new Messages.AnnounceNodeMsg(this.id);
+        multicastMessage(network.keySet(), nodeMsg);
+
+        // Add myself to the network
+        network.put(this.id, self());
+        onEndOperation(joiningOperationUid, "JOIN", -1, true, -1);
+    }
+
+    private void finishJoinFail(OperationUid joiningOperationUid) {
+        Operation operation = coordinatorOperations.remove(joiningOperationUid);
+        if (operation != null && operation.timer != null)
+            operation.timer.cancel();
+
+        // Clear all maps and variables
+        coordinatorOperations.clear();
+        storage.clear();
+        network.clear();
+        printFailOperation("JOIN", this.id, "per-item read quorum not reached");
+
+        onEndOperation(joiningOperationUid, "JOIN", -1, false, -1);
+        // delete the actor
+        context().stop(self());
+    }
+
+    /**
+     * Any active node in the network can receive this.
+     * @param startLeaveMsg by NetworkManager
+     */
+    private void onStartLeaveMsg(Messages.StartLeaveMsg  startLeaveMsg) {
+        if (!network.containsKey(this.id)) {
+            // NetworkManager send to wrong data -> not sure if it can happen since now we delete actors
+            printFailOperation("LEAVE", this.id, "actor not in the network yet");
+            return;
+        }
+
+        if (network.size() <= replicationParameters.N) {
+            printFailOperation("LEAVE", this.id, "network already too small, node leaving would break replication constraint");
+            return;
+        }
+
+        OperationUid operationUid = nextOperationUid();
+        onStartOperation(operationUid);
+        startHandingDataPhase(operationUid);
+    }
+
+    /**
+     * Any node in the network can receive this.
+     * @param leaveWarningMsg by Leaving Node
+     */
+    private void onLeaveWarningMsg(Messages.LeaveWarningMsg leaveWarningMsg) {
+        // Save data in uncertain Updates
+        uncertainUpdates.put(leaveWarningMsg.leavingOperationUid, leaveWarningMsg.dataToSave);
+
+        // Send Acknowledgment
+        Messages.LeaveAckMsg ack = new Messages.LeaveAckMsg(leaveWarningMsg.leavingOperationUid, this.id);
+        sender().tell(ack, self());
+
+        // Should I have a timer?
+    }
+
+    /**
+     * Only the leaving node handles this.
+     * It could be a stale message.
+     * @param leaveAckMsg by nodes in the network that will store some data of the Leaving Node
+     */
+    private void onLeaveAckMsg(Messages.LeaveAckMsg leaveAckMsg) {
+        // Get leaving operation
+        final Operation leavingOperation = coordinatorOperations.get(leaveAckMsg.leavingOperationUid);
+
+        if (leavingOperation == null) {
+            return; // stale message
+        }
+
+        leavingOperation.quorumTracker.onOk(leaveAckMsg.senderKey);
+
+        // we don't have a busy case so we can only wait and timeout
+        if (leavingOperation.quorumTracker.hasQuorum()) {
+            finishLeaveSuccess(leavingOperation);
+        }
+    }
+
+    /**
+     * All active nodes in the network will handle this
+     * @param leaveCommitMsg by Leaving Node
+     */
+    private void onLeaveCommitMsg(Messages.LeaveCommitMsg leaveCommitMsg) {
+        // Check if there is still the operation? -> if not IT IS A BIG PROBLEM
+
+        // Remove the Leaving Node from the network
+        network.remove(leaveCommitMsg.leavingNodeKey);
+
+        // Commit uncertainUpdates
+        Map<Integer, DataItem> dataToSave = uncertainUpdates.get(leaveCommitMsg.leavingOperationUid);
+        if (dataToSave == null) {
+            // This is a strange case and should never happen
+            return;
+        }
+
+        // Prune non-responsible items on receive
+        List<Integer> itemsToDrop = computeItemsKeysToDrop();
+        for (Integer key : itemsToDrop) {
+            storage.remove(key);
+        };
+
+        // Save only the most recent version
+        for (Map.Entry<Integer, DataItem> entry : dataToSave.entrySet()) {
+            DataItem current = storage.get(entry.getKey());
+            if (current == null || current.getVersion() < entry.getValue().getVersion()) {
+                storage.put(entry.getKey(), entry.getValue());
+            }
+        }
+
+        // Remove the uncertain data
+        uncertainUpdates.remove(leaveCommitMsg.leavingOperationUid);
+    }
+
+    /**
+     * Upon the request to leave the network I need to send my data to the right nodes.
+     * Similar as we do for the reading we will send the list of what they have to update, however
+     * in this case we need to receive confirmation from all the nodes, otherwise we have to fail.
+     * This because if even one node is not answering it would mean that we might break the replication requirement
+     * (which happens if the busy node does not yet have that item) OR we might have older version of data
+     */
+    private void startHandingDataPhase(OperationUid operationUid) {
+        // create Leaving Operation
+        Operation leavingOperation = new Operation(
+                -1,
+                new HashSet<>(),
+                -1,
+                getSender(),
+                "LEAVE",
+                null,
+                operationUid
+        );
+        coordinatorOperations.put(operationUid, leavingOperation);
+
+        final Map<Integer, Map<Integer, DataItem>> dataToAskPerNodeKey = new HashMap<>();
+        final NavigableMap<Integer, ActorRef> newRing = new TreeMap<>(network);
+        newRing.remove(this.id);
+
+        for (Map.Entry<Integer, DataItem> entry : storage.entrySet()) {
+            final Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(newRing, entry.getKey(), replicationParameters.N);
+
+            for (int nodeKey : responsibleNodesKeys) {
+                dataToAskPerNodeKey
+                        .computeIfAbsent(nodeKey, _ -> new HashMap<>())
+                        .put(entry.getKey(), entry.getValue());
+            }
+        }
+
+        leavingOperation.quorumTracker.setQuorumRequirements(
+                dataToAskPerNodeKey.keySet(),
+                dataToAskPerNodeKey.size()
+        );
+
+        for (Map.Entry<Integer, Map<Integer, DataItem>> entry : dataToAskPerNodeKey.entrySet()) {
+            Messages.LeaveWarningMsg leaveWarningMsg = new Messages.LeaveWarningMsg(
+                    operationUid,
+                    entry.getValue()
+            );
+
+            ActorRef node = network.get(entry.getKey());
+            node.tell(leaveWarningMsg, self());
+        }
+
+        // Start the timer
+        leavingOperation.timer = scheduleTimeout(replicationParameters.T, operationUid, -1);
+    }
+
+    private void finishLeaveSuccess(Operation leavingOperation) {
+        // Cancel the timer and remove the operation
+        if (leavingOperation.timer != null) {
+            leavingOperation.timer.cancel();
+        }
+        coordinatorOperations.remove(leavingOperation.operationUid);
+
+        // Remove myself from the network
+        network.remove(this.id);
+
+        Messages.LeaveCommitMsg leaveCommitMsg = new Messages.LeaveCommitMsg(
+                this.id,
+                leavingOperation.operationUid
+        );
+        multicastMessage(network.keySet(), leaveCommitMsg);
+
+        // clear all current information
+        network.clear();
+        storage.clear();
+        coordinatorOperations.clear();
+
+        onEndOperation(leavingOperation.operationUid, "LEAVE", -1, true, -1);
+        // delete the actor
+        context().stop(self());
+    }
+
+    private void finishLeaveFail(Operation leavingOperation) {
+        printFailOperation("LEAVE", this.id, "TIMEOUT");
+        onEndOperation(leavingOperation.operationUid, "LEAVE", -1, false, -1);
+        coordinatorOperations.remove(leavingOperation.operationUid);
+    }
+
+    private void onStartRecoveryMsg(Messages.StartRecoveryMsg startRecoveryMsg) {
+        OperationUid operationUid = nextOperationUid();
+        onStartOperation(operationUid);
+        Operation recoveryOperation = new Operation(
+                -1,
+                new HashSet<>(),
+                -1,
+                getSender(),
+                "RECOVER",
+                null,
+                operationUid
+        );
+        coordinatorOperations.put(operationUid, recoveryOperation);
+
+        // send Bootstrap Request
+        Messages.BootstrapRequestMsg bootstrapRequestMsg = new Messages.BootstrapRequestMsg(
+                operationUid
+        );
+        startRecoveryMsg.bootstrapNode.tell(bootstrapRequestMsg, self());
+
+        // start timer
+        recoveryOperation.timer = scheduleTimeout(replicationParameters.T, operationUid, -1);
+    }
+
+    private void finishRecoverSuccess(OperationUid operationUid) {
+        Operation operation = coordinatorOperations.remove(operationUid);
+        if (operation != null && operation.timer != null)
+            operation.timer.cancel();
+
+        // Drop keys I no longer own under the CURRENT ring
+        for (Integer k : computeItemsKeysToDrop())
+            storage.remove(k);
+
+        // Get available to other request
+        getContext().become(createReceive());
+        onEndOperation(operationUid, "RECOVER", -1, true, -1);
+    }
+
+    private void finishRecoverFail(OperationUid operationUid, String reason) {
+        Operation operation = coordinatorOperations.remove(operationUid);
+        if (operation != null && operation.timer != null)
+            operation.timer.cancel();
+
+        // Clear all maps and variables
+        coordinatorOperations.clear();
+        storage.clear();
+        network.clear();
+        printFailOperation("RECOVER", this.id, reason);
+        onEndOperation(operationUid, "RECOVER", -1, false, -1);
+    }
+
+    private void onCrashMsg(Messages.CrashMsg crashMsg) {
+        // this node become unavailable
+        getContext().become(crashed());
+    }
 
     /* ------------ HELPERS FUNCTIONS ------------ */
 
@@ -446,15 +1022,15 @@ public class Node extends AbstractActor {
         }
     }
 
-    private Set<Integer> getResponsibleNodesKeys(int dataKey){
+    private Set<Integer> getResponsibleNodesKeys(NavigableMap<Integer, ActorRef> network, int dataKey, int subsetSize){
         int N;
         if (network.isEmpty()) return Set.of();
         int size = network.size();
-        N = Math.min(size, replicationParameters.N);
+        N = Math.min(size, subsetSize);
 
         Set<Integer> responsibleNodesKeys = new HashSet<>();
 
-        // Start at the first key >= k, or wrap to the smallest key
+        // Start at the first dataKey >= k, or wrap to the smallest dataKey
         Integer cur = network.ceilingKey(dataKey);
         if (cur == null) cur = network.firstKey();
 
@@ -468,6 +1044,82 @@ public class Node extends AbstractActor {
         return responsibleNodesKeys;
     }
 
+    private int getSuccessorNodeKey(int key) {
+        Integer cur = network.ceilingKey(key);
+        if (cur == null) cur = network.firstKey();
+
+        return cur;
+    }
+
+    private Map<Integer, DataItem> computeItemsForNode(int nodeKey, NavigableMap<Integer, ActorRef> ring) {
+        final Map<Integer, DataItem> map = new HashMap<>();
+        for (var e : storage.entrySet()) {
+            if (getResponsibleNodesKeys(ring, e.getKey(), replicationParameters.N).contains(nodeKey)) {
+                map.put(e.getKey(), e.getValue());
+            }
+        }
+        return map;
+    }
+
+    /**
+     * It is a dumb way to compute this O(network.size * storage), there are faster ways
+     * by computing the intervals for each data key
+     * @param nodeKey of the joining node
+     * @return a Map with the items the joining node will have to store
+     */
+    private Map<Integer, DataItem> computeItemsForJoiner(int nodeKey) {
+        // Simulate the new ring
+        final NavigableMap<Integer, ActorRef> newRing = new TreeMap<>(network);
+        newRing.put(nodeKey, null);
+        return computeItemsForNode(nodeKey, newRing);
+    }
+
+    /**
+     * It is a dumb way to compute this O(network.size * storage), there are faster ways
+     * by computing the intervals for eachdata key
+     * @return a List with the keys that the node is not responsible anymore
+     */
+    private List<Integer> computeItemsKeysToDrop() {
+        final List<Integer> itemsToDrop = new ArrayList<>();
+        for (Map.Entry<Integer, DataItem> entry : storage.entrySet()) {
+            if (!getResponsibleNodesKeys(network, entry.getKey(), replicationParameters.N).contains(this.id)) {
+                itemsToDrop.add(entry.getKey());
+            }
+        }
+        return itemsToDrop;
+    }
+
+    private void printFailOperation(String operationType, int nodeKey, String reason) {
+        System.out.printf(
+                "[Node %s] %s Operation for nodeKey=%d  failed: %s%n",
+                getSelf().path().name(), operationType, nodeKey, reason
+        );
+    }
+
+    // -------------- HELPER FUNCTION FOR LOGGING -------------- //
+    private void onStartOperation(OperationUid operationUid) {
+        startTimes.put(operationUid, System.nanoTime());
+    }
+    private void onEndOperation(OperationUid operationUid, String operationType, int dataKey, boolean success, int chosenVersion) {
+        long startTime = this.startTimes.remove(operationUid);
+        long endTime = System.nanoTime();
+        var s = new LogModels.Summary(
+                Instant.ofEpochMilli(startTime/1_000_000).toString(),
+                Instant.ofEpochMilli(endTime/1_000_000).toString(),
+                operationUid.toString(),
+                self().path().name(),
+                operationType,
+                dataKey,
+                chosenVersion,
+                success,
+                (endTime - startTime) / 1_000_000,
+                "",
+                replicationParameters.N, replicationParameters.R, replicationParameters.W, replicationParameters.T
+        );
+        logger.summary(s);
+    }
+    // --------------------------------------------------------- //
+
     // Mapping between the received message types and our actor methods
     @Override
     public Receive createReceive() {
@@ -479,6 +1131,28 @@ public class Node extends AbstractActor {
                 .match(Messages.GetRequestMsg.class, this::onGetRequestMsg)
                 .match(Messages.GetResponseMsg.class, this::onGetResponseMsg)
                 .match(Messages.Timeout.class, this::onTimeout)
+                .match(Messages.StartJoinMsg.class, this::onStartJoinMsg)
+                .match(Messages.BootstrapRequestMsg.class, this::onBootstrapRequestMsg)
+                .match(Messages.BootstrapResponseMsg.class, this::onBootstrapResponseMsg)
+                .match(Messages.RequestDataMsg.class, this::onRequestDataMsg)
+                .match(Messages.ResponseDataMsg.class, this::onResponseDataMsg)
+                .match(Messages.ReadDataRequestMsg.class, this::onReadDataRequestMsg)
+                .match(Messages.ReadDataResponseMsg.class, this::onReadDataResponseMsg)
+                .match(Messages.AnnounceNodeMsg.class, this::onAnnounceNodeMsg)
+                .match(Messages.StartLeaveMsg.class, this::onStartLeaveMsg)
+                .match(Messages.LeaveWarningMsg.class, this::onLeaveWarningMsg)
+                .match(Messages.LeaveAckMsg.class, this::onLeaveAckMsg)
+                .match(Messages.LeaveCommitMsg.class, this::onLeaveCommitMsg)
+                .match(Messages.CrashMsg.class, this::onCrashMsg)
+                .build();
+    }
+
+    public Receive crashed() {
+        return receiveBuilder()
+                .match(Messages.StartRecoveryMsg.class, this::onStartRecoveryMsg)
+                .match(Messages.BootstrapResponseMsg.class, this::onBootstrapResponseMsg)
+                .match(Messages.ResponseDataMsg.class, this::onResponseDataMsg)
+                .match(Messages.ReadDataResponseMsg.class, this::onReadDataResponseMsg)
                 .build();
     }
 }
