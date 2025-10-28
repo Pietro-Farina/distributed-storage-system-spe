@@ -2,6 +2,8 @@ package it.unitn.ds1.actors;
 
 import akka.actor.*;
 import it.unitn.ds1.DataItem;
+import it.unitn.ds1.logging.AsyncRunLogger;
+import it.unitn.ds1.logging.LogModels;
 import it.unitn.ds1.protocol.KeyDataOperationRef;
 import it.unitn.ds1.protocol.KeyOperationRef;
 import it.unitn.ds1.protocol.Messages;
@@ -12,6 +14,7 @@ import scala.concurrent.duration.Duration;
 
 import javax.xml.crypto.Data;
 import java.io.Serializable;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
@@ -42,6 +45,11 @@ public class Node extends AbstractActor {
     //  To store data from leaving node not yet committed
     private final Map<OperationUid, Map<Integer, DataItem>> uncertainUpdates;
 
+    // ------------- for logging purposes ------------- //
+    private final AsyncRunLogger logger = AsyncRunLogger.get();
+    private final Map<OperationUid, Long> startTimes;
+    // ------------------------------------------------ //
+
     public Node(
             int id,
             ApplicationConfig.Replication replicationParameters,
@@ -58,6 +66,8 @@ public class Node extends AbstractActor {
         this.opCounter = 0;
         this.lockTimers = new HashMap<>();
         this.uncertainUpdates = new HashMap<>();
+
+        this.startTimes = new HashMap<>();
     }
 
     static public Props props(
@@ -151,17 +161,17 @@ public class Node extends AbstractActor {
     }
 
     private void startUpdateAsCoordinator(int dataKey, String value) {
+        OperationUid operationUid = nextOperationUid();
         // guard at coordinator (optional but recommended)
         // TODO write reasons of guard at coordinator
         if (!acquireCoordinatorGuard(dataKey)) {
-            getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY"), self());
+            getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY", operationUid, "UPDATE", dataKey), self());
             return;
         }
 
         // check the nodes responsible for the request
         Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(network, dataKey, replicationParameters.N);
 
-        OperationUid operationUid = nextOperationUid();
         Operation operation = new Operation(
                 dataKey,
                 responsibleNodesKeys,
@@ -265,19 +275,19 @@ public class Node extends AbstractActor {
         }
 
         // send the error to the client
-        operation.client.tell(new Messages.ErrorMsg(reason), self());
+        operation.client.tell(new Messages.ErrorMsg(reason, operation.operationUid, "UPDATE", operation.dataKey), self());
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
     }
 
     private void startGetAsCoordinator(int dataKey) {
+        OperationUid operationUid = nextOperationUid();
         if (!acquireCoordinatorGuard(dataKey)) {
-            getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY"), self());
+            getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY", operationUid, "GET", dataKey), self());
             return;
         }
         Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(network, dataKey, replicationParameters.N);
-        OperationUid operationUid = nextOperationUid();
         Operation operation = new Operation(
                 dataKey,
                 responsibleNodesKeys,
@@ -294,7 +304,7 @@ public class Node extends AbstractActor {
             if (!acquireReplicaLock(dataKey)) {
                 // Busy locally -> fast fail
                 // TODO write reasons of why reject if busy locally
-                finishUpdateFail(operation, "LOCAL BUSY"); // TODO change to a general Fail
+                finishUpdateFail(operation, "LOCAL BUSY");
                 return;
             }
             // read my value
@@ -362,7 +372,7 @@ public class Node extends AbstractActor {
 
         // reply to client
         Messages.GetResultMsg resultMsg = new Messages.GetResultMsg(
-                -1, operation.dataKey, chosenVersion);
+                operation.operationUid, operation.dataKey, chosenVersion);
         operation.client.tell(resultMsg, self());
 
         // cleanup: free locks and cancel timer
@@ -371,7 +381,7 @@ public class Node extends AbstractActor {
 
     private void finishGetFail(Operation operation, String reason) {
         // send the error to the client
-        operation.client.tell(new Messages.ErrorMsg(reason), self());
+        operation.client.tell(new Messages.ErrorMsg(reason, operation.operationUid, "GET", operation.dataKey), self());
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
@@ -410,7 +420,7 @@ public class Node extends AbstractActor {
             } else if (operation.operationType.equals("LEAVE")) {
                 finishLeaveFail(operation);
             } else if (operation.operationType.equals("RECOVER")) {
-                finishRecoverFail(operation.operationUid);
+                finishRecoverFail(operation.operationUid, "timeout");
             }
 
         } else { // I am a node
@@ -433,17 +443,18 @@ public class Node extends AbstractActor {
     private void onStartJoinMsg(Messages.StartJoinMsg startJoinMsg) {
         // the node is already in the network
         if (network.containsKey(startJoinMsg.newNodeKey)) {
-            // TODO error msg
+            printFailOperation("JOIN", startJoinMsg.newNodeKey, "node already exists");
             return;
         }
         // Wrong ID
         if (this.id != startJoinMsg.newNodeKey) {
-            // TODO error msg
+            printFailOperation("JOIN", startJoinMsg.newNodeKey, "node id ["+ this.id +"] differs from given id");
             return;
         }
+        OperationUid operationUid = nextOperationUid();
+        onStartOperation(operationUid);
 
         // create the operation
-        OperationUid operationUid = nextOperationUid();
         Operation operation = new Operation(
                 -1,
                 new HashSet<>(),
@@ -629,7 +640,7 @@ public class Node extends AbstractActor {
             if (joiningOperation.operationType.equals("JOIN")) {
                 finishJoinFail(readDataResponseMsg.joiningOperationUid);
             } else {
-                finishRecoverFail(readDataResponseMsg.joiningOperationUid); // mirror of join fail (stop or retry policy)
+                finishRecoverFail(readDataResponseMsg.joiningOperationUid, "per-item read quorum not reached"); // mirror of join fail (stop or retry policy)
             }
         }
     }
@@ -722,6 +733,7 @@ public class Node extends AbstractActor {
 
         // Add myself to the network
         network.put(this.id, self());
+        onEndOperation(joiningOperationUid, "JOIN", -1, true, -1);
     }
 
     private void finishJoinFail(OperationUid joiningOperationUid) {
@@ -733,8 +745,9 @@ public class Node extends AbstractActor {
         coordinatorOperations.clear();
         storage.clear();
         network.clear();
-        // TODO write error msg
+        printFailOperation("JOIN", this.id, "per-item read quorum not reached");
 
+        onEndOperation(joiningOperationUid, "JOIN", -1, false, -1);
         // delete the actor
         context().stop(self());
     }
@@ -745,16 +758,19 @@ public class Node extends AbstractActor {
      */
     private void onStartLeaveMsg(Messages.StartLeaveMsg  startLeaveMsg) {
         if (!network.containsKey(this.id)) {
-            // TODO write error msg -> NetworkManager send to wrong data
+            // NetworkManager send to wrong data -> not sure if it can happen since now we delete actors
+            printFailOperation("LEAVE", this.id, "actor not in the network yet");
             return;
         }
 
         if (network.size() <= replicationParameters.N) {
-            // TODO write error msg -> Cannot leave the network -> break replication constraint
+            printFailOperation("LEAVE", this.id, "network already too small, node leaving would break replication constraint");
             return;
         }
 
-        startHandingDataPhase();
+        OperationUid operationUid = nextOperationUid();
+        onStartOperation(operationUid);
+        startHandingDataPhase(operationUid);
     }
 
     /**
@@ -835,9 +851,8 @@ public class Node extends AbstractActor {
      * This because if even one node is not answering it would mean that we might break the replication requirement
      * (which happens if the busy node does not yet have that item) OR we might have older version of data
      */
-    private void startHandingDataPhase() {
+    private void startHandingDataPhase(OperationUid operationUid) {
         // create Leaving Operation
-        OperationUid operationUid = nextOperationUid();
         Operation leavingOperation = new Operation(
                 -1,
                 new HashSet<>(),
@@ -903,16 +918,20 @@ public class Node extends AbstractActor {
         storage.clear();
         coordinatorOperations.clear();
 
+        onEndOperation(leavingOperation.operationUid, "LEAVE", -1, true, -1);
         // delete the actor
         context().stop(self());
     }
 
     private void finishLeaveFail(Operation leavingOperation) {
+        printFailOperation("LEAVE", this.id, "TIMEOUT");
+        onEndOperation(leavingOperation.operationUid, "LEAVE", -1, false, -1);
         coordinatorOperations.remove(leavingOperation.operationUid);
     }
 
     private void onStartRecoveryMsg(Messages.StartRecoveryMsg startRecoveryMsg) {
         OperationUid operationUid = nextOperationUid();
+        onStartOperation(operationUid);
         Operation recoveryOperation = new Operation(
                 -1,
                 new HashSet<>(),
@@ -945,9 +964,10 @@ public class Node extends AbstractActor {
 
         // Get available to other request
         getContext().become(createReceive());
+        onEndOperation(operationUid, "RECOVER", -1, true, -1);
     }
 
-    private void finishRecoverFail(OperationUid operationUid) {
+    private void finishRecoverFail(OperationUid operationUid, String reason) {
         Operation operation = coordinatorOperations.remove(operationUid);
         if (operation != null && operation.timer != null)
             operation.timer.cancel();
@@ -956,7 +976,8 @@ public class Node extends AbstractActor {
         coordinatorOperations.clear();
         storage.clear();
         network.clear();
-        // TODO write error msg
+        printFailOperation("RECOVER", this.id, reason);
+        onEndOperation(operationUid, "RECOVER", -1, false, -1);
     }
 
     private void onCrashMsg(Messages.CrashMsg crashMsg) {
@@ -1068,6 +1089,37 @@ public class Node extends AbstractActor {
         return itemsToDrop;
     }
 
+    private void printFailOperation(String operationType, int nodeKey, String reason) {
+        System.out.printf(
+                "[Node %s] %s Operation for nodeKey=%d  failed: %s%n",
+                getSelf().path().name(), operationType, nodeKey, reason
+        );
+    }
+
+    // -------------- HELPER FUNCTION FOR LOGGING -------------- //
+    private void onStartOperation(OperationUid operationUid) {
+        startTimes.put(operationUid, System.nanoTime());
+    }
+    private void onEndOperation(OperationUid operationUid, String operationType, int dataKey, boolean success, int chosenVersion) {
+        long startTime = this.startTimes.remove(operationUid);
+        long endTime = System.nanoTime();
+        var s = new LogModels.Summary(
+                Instant.ofEpochMilli(startTime/1_000_000).toString(),
+                Instant.ofEpochMilli(endTime/1_000_000).toString(),
+                operationUid.toString(),
+                self().path().name(),
+                operationType,
+                dataKey,
+                chosenVersion,
+                success,
+                (endTime - startTime) / 1_000_000,
+                "",
+                replicationParameters.N, replicationParameters.R, replicationParameters.W, replicationParameters.T
+        );
+        logger.summary(s);
+    }
+    // --------------------------------------------------------- //
+
     // Mapping between the received message types and our actor methods
     @Override
     public Receive createReceive() {
@@ -1087,6 +1139,10 @@ public class Node extends AbstractActor {
                 .match(Messages.ReadDataRequestMsg.class, this::onReadDataRequestMsg)
                 .match(Messages.ReadDataResponseMsg.class, this::onReadDataResponseMsg)
                 .match(Messages.AnnounceNodeMsg.class, this::onAnnounceNodeMsg)
+                .match(Messages.StartLeaveMsg.class, this::onStartLeaveMsg)
+                .match(Messages.LeaveWarningMsg.class, this::onLeaveWarningMsg)
+                .match(Messages.LeaveAckMsg.class, this::onLeaveAckMsg)
+                .match(Messages.LeaveCommitMsg.class, this::onLeaveCommitMsg)
                 .match(Messages.CrashMsg.class, this::onCrashMsg)
                 .build();
     }

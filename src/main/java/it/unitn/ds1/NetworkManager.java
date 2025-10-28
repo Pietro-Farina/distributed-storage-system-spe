@@ -34,7 +34,7 @@ public class NetworkManager {
         int i = 0;
         for (Integer nodeKey : nodeKeysToAdd) {
             network.put(nodeKey, system.actorOf(Node.props(nodeKey, parameters.replication, parameters.delays), "node_" + nodeKey));
-            clients.add(system.actorOf(Client.props(parameters.delays), "client" + ++i));
+            clients.add(system.actorOf(Client.props(parameters.delays, parameters.replication), "client" + ++i));
         }
 
         // Send join messages to the nodes to inform them of the whole network

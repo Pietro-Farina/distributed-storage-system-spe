@@ -150,13 +150,13 @@ public class Messages {
     }
 
     public static class GetResultMsg implements Serializable {
-        public final int clientOperationNumber;
+        public final OperationUid operationUid;
         public final int dataKey;
         public final DataItem value;
 
-        public GetResultMsg(int clientOperationNumber,
+        public GetResultMsg(OperationUid operationUid,
                             int dataKey, DataItem value) {
-            this.clientOperationNumber = clientOperationNumber;
+            this.operationUid = operationUid;
             this.dataKey = dataKey;
             this.value = value;
         }
@@ -300,9 +300,15 @@ public class Messages {
 
     public static class ErrorMsg implements Serializable {
         public final String reason;
+        public final OperationUid operationUid;
+        public final String operationType;
+        public final int dataKey;
 
-        public ErrorMsg(String reason) {
+        public ErrorMsg(String reason, OperationUid operationUid, String operationType, int dataKey) {
             this.reason = reason;
+            this.operationUid = operationUid;
+            this.operationType = operationType;
+            this.dataKey = dataKey;
         }
     }
 
