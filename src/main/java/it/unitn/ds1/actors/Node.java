@@ -402,7 +402,7 @@ public class Node extends AbstractActor {
 
         // We can free the lock
         releaseReplicaLock(dataKey);
-        return new Outcome(getRequestMsg.operationUid.toString(), "GET", dataKey, -1, "INT_GET_REPLICA_REPLY", true);
+        return new Outcome(getRequestMsg.operationUid.toString(), "GET", dataKey, currentDataItem == null ? 0 : currentDataItem.getVersion(), "INT_GET_REPLICA_REPLY", true);
     }
 
     private Outcome finishGetSuccess(Operation operation) {
