@@ -173,73 +173,79 @@ public class Messages {
     }
 
     public static class BootstrapRequestMsg implements Serializable {
-        public final OperationUid joiningOperationUid;
+        public final OperationUid operationUid;
+        public final boolean isRecover;
 
-        public BootstrapRequestMsg(OperationUid joiningOperationUid) {
-            this.joiningOperationUid = joiningOperationUid;
+        public BootstrapRequestMsg(OperationUid operationUid, boolean isRecover) {
+            this.operationUid = operationUid;
+            this.isRecover = isRecover;
         }
     }
 
     public static class BootstrapResponseMsg implements Serializable {
-        public final OperationUid joiningOperationUid;
+        public final OperationUid operationUid;
         public final NavigableMap<Integer, ActorRef> network;
 
-        public BootstrapResponseMsg(OperationUid joiningOperationUid, NavigableMap<Integer, ActorRef> network) {
-            this.joiningOperationUid = joiningOperationUid;
+        public BootstrapResponseMsg(OperationUid operationUid, NavigableMap<Integer, ActorRef> network) {
+            this.operationUid = operationUid;
             this.network = Collections.unmodifiableNavigableMap(new TreeMap<>(Optional.ofNullable(network).orElseGet(TreeMap::new)));
         }
     }
 
     public static class RequestDataMsg implements Serializable {
-        public final OperationUid joiningOperationUid;
+        public final OperationUid operationUid;
         public final int newNodeKey;
         public final boolean isRecover;
 
-        public RequestDataMsg(OperationUid joiningOperationUid, int newNodeKey, boolean isRecover) {
-            this.joiningOperationUid = joiningOperationUid;
+        public RequestDataMsg(OperationUid operationUid, int newNodeKey, boolean isRecover) {
+            this.operationUid = operationUid;
             this.newNodeKey = newNodeKey;
             this.isRecover = isRecover;
         }
     }
 
     public static class ResponseDataMsg implements Serializable {
-        public final OperationUid joiningOperationUid;
+        public final OperationUid operationUid;
         public final Map<Integer, DataItem> requestedData;
         public final int senderKey;
 
-        public ResponseDataMsg(OperationUid joiningOperationUid, Map<Integer, DataItem> requestedData, int senderKey) {
-            this.joiningOperationUid = joiningOperationUid;
+        public ResponseDataMsg(OperationUid operationUid, Map<Integer, DataItem> requestedData, int senderKey) {
+            this.operationUid = operationUid;
             this.requestedData = Collections.unmodifiableMap(new TreeMap<>(Optional.ofNullable(requestedData).orElseGet(Map::of)));
             this.senderKey = senderKey;
         }
     }
 
     public static class ReadDataRequestMsg implements Serializable {
-        public final OperationUid joiningOperationUid;
+        public final OperationUid operationUid;
         public final List<KeyOperationRef> requestedData;
+        public final boolean isRecover;
 
-        public ReadDataRequestMsg(OperationUid joiningOperationUid, List<KeyOperationRef> requestedData) {
-            this.joiningOperationUid = joiningOperationUid;
+        public ReadDataRequestMsg(OperationUid operationUid, List<KeyOperationRef> requestedData, boolean isRecover) {
+            this.operationUid = operationUid;
             this.requestedData = Collections.unmodifiableList(new ArrayList<>(Optional.ofNullable(requestedData).orElseGet(List::of)));
+            this.isRecover = isRecover;
         }
     }
 
     public static class ReadDataResponseMsg implements Serializable {
-        public final OperationUid joiningOperationUid;
+        public final OperationUid operationUid;
         public final List<KeyDataOperationRef> requestedData;
         public final int senderKey;
 
-        public ReadDataResponseMsg(OperationUid joiningOperationUid, List<KeyDataOperationRef> requestedData, int senderKey) {
-            this.joiningOperationUid = joiningOperationUid;
+        public ReadDataResponseMsg(OperationUid operationUid, List<KeyDataOperationRef> requestedData, int senderKey) {
+            this.operationUid = operationUid;
             this.requestedData = Collections.unmodifiableList(new ArrayList<>(Optional.ofNullable(requestedData).orElseGet(List::of)));
             this.senderKey = senderKey;
         }
     }
 
     public static class AnnounceNodeMsg implements Serializable {
+        public final OperationUid operationUid;
         public final int newNodeKey;
 
-        public AnnounceNodeMsg(int newNodeKey) {
+        public AnnounceNodeMsg(OperationUid operationUid, int newNodeKey) {
+            this.operationUid = operationUid;
             this.newNodeKey = newNodeKey;
         }
     }
