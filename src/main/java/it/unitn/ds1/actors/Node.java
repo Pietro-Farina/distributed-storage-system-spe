@@ -418,7 +418,7 @@ public class Node extends AbstractActor {
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
-        return new Outcome(operation.operationUid.toString(), "GET", operation.dataKey, operation.chosenVersion.getVersion(), "TODO", true);
+        return new Outcome(operation.operationUid.toString(), "GET", operation.dataKey, chosenVersion.getVersion(), "TODO", true);
     }
 
     private void finishGetFail(Operation operation, String reason) {

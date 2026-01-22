@@ -6,18 +6,23 @@ import akka.actor.ActorRef;
 import akka.actor.ActorSystem;
 import it.unitn.ds1.actors.Client;
 import it.unitn.ds1.actors.Node;
+import it.unitn.ds1.cli.Cli;
+import it.unitn.ds1.cli.CommandExecutor;
 import it.unitn.ds1.logging.AsyncRunLogger;
 import it.unitn.ds1.logging.LogModels;
 import it.unitn.ds1.logging.LoggerConfig;
 import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.utils.ApplicationConfig;
 
+import java.io.FileReader;
+import java.io.InputStreamReader;
+import java.io.Reader;
 import java.util.*;
 
 public class Main {
     final static int N_NODES = 4;
 
-    public static void main(String[] args) throws InterruptedException {
+    public static void main(String[] args) throws Exception {
         // Loads application.conf (+ application-{env}.conf overrides if present)
         // Note that they can be override by command-line, e.g.:
         // -Dds1.replication.N=5 -Dds1.log.eventDetail=NORMAL
@@ -59,45 +64,64 @@ public class Main {
         // Create the Network Manager
         NetworkManager networkManager = new NetworkManager(cfg);
 
-        // Generate N node keys (spread on the ring)
-        int nNodes = 8;
-        List<Integer> nodeKeysToAdd = new ArrayList<>();
-        for (int i = 0; i < nNodes; i++) {
-            nodeKeysToAdd.add((i + 1) * 10); // 10, 20, 30, ...
+        // Create the command executor ( -> reads and send request to network manager)
+        CommandExecutor executor = new CommandExecutor(networkManager);
+
+        Reader input;
+        if (args.length == 0) {
+            System.out.println("Interactive CLI mode");
+            input = new InputStreamReader(System.in);
+        } else if (args.length == 1) {
+            System.out.println("Scripted CLI mode: " + args[0]);
+            input = new FileReader(args[0]);
+        } else {
+            throw new IllegalArgumentException(
+                    "Usage: gradlew run [script.txt]"
+            );
         }
 
-        // Generate M random data entries
-        int nDataItems = 25;
-        Map<Integer, String> dataToAdd = new LinkedHashMap<>();
-        String[] sampleValues = {"iron", "copper", "water", "oxygen", "nickel", "rock", "dust"};
+        Cli.run(input, executor);
 
-        for (int i = 0; i < nDataItems; i++) {
-            int key = rand.nextInt(100);                  // key in [0,100)
-            String value = sampleValues[rand.nextInt(sampleValues.length)];
-            dataToAdd.put(key, value + "_" + key);        // e.g., "iron_57"
-        }
 
-        networkManager.initializeNetwork(nodeKeysToAdd, dataToAdd, true);
-        Thread.sleep(5000);
-
-        int nodeKey = nodeKeysToAdd.getFirst();
-        networkManager.addNode(200, nodeKey);
-
-        Thread.sleep(2000);
-        System.out.println(String.format("Adding node %d to network", 200));
-
-        networkManager.crashNode(200);
-
-        Thread.sleep(2000);
-        System.out.println(String.format("Crashing node %d to network", 200));
-
-        networkManager.recoverNode(200, nodeKey);
-
-        Thread.sleep(1000);
-        System.out.println(String.format("Recovering node %d to network", 200));
-
-        networkManager.removeNode(200);
-        System.out.println(String.format("Removing node %d from network", 200));
+//        // Generate N node keys (spread on the ring)
+//        int nNodes = 8;
+//        List<Integer> nodeKeysToAdd = new ArrayList<>();
+//        for (int i = 0; i < nNodes; i++) {
+//            nodeKeysToAdd.add((i + 1) * 10); // 10, 20, 30, ...
+//        }
+//
+//        // Generate M random data entries
+//        int nDataItems = 25;
+//        Map<Integer, String> dataToAdd = new LinkedHashMap<>();
+//        String[] sampleValues = {"iron", "copper", "water", "oxygen", "nickel", "rock", "dust"};
+//
+//        for (int i = 0; i < nDataItems; i++) {
+//            int key = rand.nextInt(100);                  // key in [0,100)
+//            String value = sampleValues[rand.nextInt(sampleValues.length)];
+//            dataToAdd.put(key, value + "_" + key);        // e.g., "iron_57"
+//        }
+//
+//        networkManager.initializeNetwork(nodeKeysToAdd, dataToAdd, true);
+//        Thread.sleep(5000);
+//
+//        int nodeKey = nodeKeysToAdd.getFirst();
+//        networkManager.addNode(200, nodeKey);
+//
+//        Thread.sleep(2000);
+//        System.out.println(String.format("Adding node %d to network", 200));
+//
+//        networkManager.crashNode(200);
+//
+//        Thread.sleep(2000);
+//        System.out.println(String.format("Crashing node %d to network", 200));
+//
+//        networkManager.recoverNode(200, nodeKey);
+//
+//        Thread.sleep(1000);
+//        System.out.println(String.format("Recovering node %d to network", 200));
+//
+//        networkManager.removeNode(200);
+//        System.out.println(String.format("Removing node %d from network", 200));
 
         networkManager.terminate();
     }

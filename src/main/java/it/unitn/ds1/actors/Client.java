@@ -113,7 +113,7 @@ public class Client extends AbstractActor {
 
     private void onGetResultMsg(Messages.GetResultMsg getResultMsg) {
         System.out.printf(
-                "[Client %s] Get result: dataKey=%d → value=\"%s\" (version=%d)%n",
+                "[Client %s] Get result: dataKey=%d -> value=\"%s\" (version=%d)%n",
                 getSelf().path().name(), getResultMsg.dataKey, getResultMsg.value.getValue(), getResultMsg.value.getVersion()
         );
         onEndOperation(getResultMsg.operationUid,"GET", getResultMsg.dataKey, true, getResultMsg.value.getVersion());

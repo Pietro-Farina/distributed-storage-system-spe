@@ -1,0 +1,100 @@
+########################################
+# CLI FULL COMMAND TEST
+# This script tests ALL supported commands
+########################################
+
+# ---- basic control ----
+sleep 200
+
+########################################
+# Network initialization
+########################################
+
+# Initialize the network with three nodes
+init 10 20 30
+
+sleep 500
+
+########################################
+# Client management
+########################################
+
+# Create two clients
+client create client1
+client create client2
+
+sleep 200
+
+########################################
+# Client operations (UPDATE / GET)
+########################################
+
+# client1 updates key 30 with value "alpha" via node 10
+client update client1 30 alpha 10
+
+# client2 updates key 40 with value "beta" via node 20
+client update client2 40 beta 20
+
+sleep 300
+
+# client1 gets key 30 via node 30
+client get client1 30 30
+
+# client2 gets key 40 via node 10
+client get client2 40 10
+
+sleep 500
+
+########################################
+# Node operations: JOIN
+########################################
+
+# Node 25 joins the network using node 10 as bootstrap
+node join 25 10
+
+sleep 800
+
+########################################
+# More client operations after join
+########################################
+
+client update client1 50 gamma 25
+client get client2 50 20
+
+sleep 500
+
+########################################
+# Node operations: LEAVE
+########################################
+
+# Node 20 leaves the network
+node leave 20
+
+sleep 800
+
+########################################
+# Node operations: CRASH / RECOVER
+########################################
+
+# Crash node 30
+node crash 30
+
+sleep 500
+
+# Recover node 30 using node 10 as bootstrap
+node recover 30 10
+
+sleep 800
+
+########################################
+# Final client operations
+########################################
+
+client get client1 30 10
+client get client2 40 25
+
+########################################
+# Terminate CLI
+########################################
+
+exit

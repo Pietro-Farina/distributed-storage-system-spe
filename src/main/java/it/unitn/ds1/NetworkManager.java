@@ -1,9 +1,6 @@
 package it.unitn.ds1;
 
-import akka.actor.AbstractActor;
-import akka.actor.ActorRef;
-import akka.actor.ActorSystem;
-import akka.actor.Props;
+import akka.actor.*;
 import it.unitn.ds1.actors.Client;
 import it.unitn.ds1.actors.Node;
 import it.unitn.ds1.protocol.Messages;
@@ -14,8 +11,9 @@ import java.util.*;
 public class NetworkManager {
     private final ActorSystem system;
     public final NavigableMap<Integer, ActorRef> network;
-    public final List<ActorRef> clients;
+    public final Map<String, ActorRef> clients;
     private final ActorRef inbox;
+    private Boolean initialized;
 
     // replication parameters -> Gave to the
     public final ApplicationConfig parameters;
@@ -23,9 +21,10 @@ public class NetworkManager {
     public NetworkManager(ApplicationConfig parameters) {
         system = ActorSystem.create("distributed-storage-system");
         network = new TreeMap<>();
-        clients = new ArrayList<>();
+        clients = new TreeMap<>();
         this.parameters = parameters;
         this.inbox = system.actorOf(ManagerInbox.props(this), "networkManagerInbox");
+        this.initialized = false;
     }
 
     /**
@@ -38,7 +37,8 @@ public class NetworkManager {
         int i = 0;
         for (Integer nodeKey : nodeKeysToAdd) {
             network.put(nodeKey, system.actorOf(Node.props(nodeKey, parameters.replication, parameters.delays), "node_" + nodeKey));
-            clients.add(system.actorOf(Client.props(parameters.delays, parameters.replication), "client" + ++i));
+            String clientName =  "client" + ++i;
+            clients.put(clientName, system.actorOf(Client.props(parameters.delays, parameters.replication), clientName));
         }
 
         // Send join messages to the nodes to inform them of the whole network
@@ -47,11 +47,14 @@ public class NetworkManager {
             peer.getValue().tell(start, ActorRef.noSender());
         }
 
+        this.initialized = true;
+
         if (dataToAdd.isEmpty() || clients.isEmpty()) return;
 
         final int nClients = clients.size();
 
         List<Map.Entry<Integer, String>> entries = new ArrayList<>(dataToAdd.entrySet());
+        List<ActorRef> clientList = new ArrayList<>(clients.values());
 
         for (int idx = 0; idx < entries.size(); idx++) {
             Map.Entry<Integer, String> e = entries.get(idx);
@@ -61,10 +64,10 @@ public class NetworkManager {
             ActorRef client;
             ActorRef coordinator;
             if (deterministic) {
-                client = clients.getFirst();
+                client = clientList.getFirst();
                 coordinator = network.get(nodeKeysToAdd.getFirst());
             } else {
-                client = clients.get(idx % nClients);
+                client = clientList.get(idx % nClients);
                 coordinator = network.get(nodeKeysToAdd.get(idx % nClients));
             }
             client.tell(new Messages.QueueUpdateMsg(key, value, coordinator), ActorRef.noSender());
@@ -82,6 +85,13 @@ public class NetworkManager {
     }
 
     public void addNode(int newNodeKey, int bootstrapNodeKey) {
+        if (!initialized) {
+            System.out.printf(
+                    "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
+                    "JOIN", newNodeKey, "network not initialized"
+            );
+            return;
+        }
         if (network.containsKey(newNodeKey)) {
             System.out.printf(
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
@@ -101,6 +111,13 @@ public class NetworkManager {
     }
 
     public void removeNode(int nodeKey) {
+        if (!initialized) {
+            System.out.printf(
+                    "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
+                    "LEAVE", nodeKey, "network not initialized"
+            );
+            return;
+        }
         if (!network.containsKey(nodeKey)) {
             System.out.printf(
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
@@ -113,6 +130,13 @@ public class NetworkManager {
     }
 
     public void crashNode(int nodeKey) {
+        if (!initialized) {
+            System.out.printf(
+                    "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
+                    "CRASH", nodeKey, "network not initialized"
+            );
+            return;
+        }
         if (!network.containsKey(nodeKey)) {
             System.out.printf(
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
@@ -125,6 +149,13 @@ public class NetworkManager {
     }
 
     public void recoverNode(int nodeKey, int bootstrapNodeKey) {
+        if (!initialized) {
+            System.out.printf(
+                    "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
+                    "RECOVER", nodeKey, "network not initialized"
+            );
+            return;
+        }
         if (!network.containsKey(nodeKey)) {
             System.out.printf(
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
@@ -140,9 +171,118 @@ public class NetworkManager {
             return;
         }
         ActorRef node = network.get(nodeKey);
-        node.tell(new Messages.StartRecoveryMsg(network.get(bootstrapNodeKey)), ActorRef.noSender());
+        node.tell(new Messages.StartRecoveryMsg(
+                network.get(bootstrapNodeKey)
+        ), ActorRef.noSender());
     }
 
+    public void requestClientUpdate(String clientName, int dataKey, String dataValue, int nodeKey) {
+        if (!initialized) {
+            System.out.printf(
+                    "[Network Manager] %s Operation from client=%s for nodeKey=%d failed: %s%n",
+                    "CLIENT_UPDATE", clientName, nodeKey, "network not initialized"
+            );
+            return;
+        }
+        if (!clients.containsKey(clientName)) {
+            System.out.printf(
+                    "[Network Manager] %s Operation from client=%s for nodeKey=%d failed: %s%n",
+                    "CLIENT_UPDATE", clientName, nodeKey, "client not in system"
+            );
+            return;
+        }
+        if (!network.containsKey(nodeKey)) {
+            System.out.printf(
+                    "[Network Manager] %s Operation from client=%s for nodeKey=%d failed: %s%n",
+                    "CLIENT_UPDATE", clientName, nodeKey, "node not in network"
+            );
+            return;
+        }
+        ActorRef client = clients.get(clientName);
+        ActorRef node = network.get(nodeKey);
+
+        client.tell(new Messages.StartUpdateMSg(
+                dataKey, dataValue, node
+        ),  ActorRef.noSender());
+    }
+
+    public void requestClientGet(String clientName, int dataKey, int nodeKey) {
+        if (!initialized) {
+            System.out.printf(
+                    "[Network Manager] %s Operation from client=%s for nodeKey=%d failed: %s%n",
+                    "CLIENT_GET", clientName, nodeKey, "network not initialized"
+            );
+            return;
+        }
+        if (!clients.containsKey(clientName)) {
+            System.out.printf(
+                    "[Network Manager] %s Operation from client=%s for nodeKey=%d failed: %s%n",
+                    "CLIENT_GET", clientName, nodeKey, "client not in system"
+            );
+            return;
+        }
+        if (!network.containsKey(nodeKey)) {
+            System.out.printf(
+                    "[Network Manager] %s Operation from client=%s for nodeKey=%d failed: %s%n",
+                    "CLIENT_GET", clientName, nodeKey, "node not in network"
+            );
+            return;
+        }
+        ActorRef client = clients.get(clientName);
+        ActorRef node = network.get(nodeKey);
+
+        client.tell(new Messages.StartGetMsg(
+                dataKey, node
+        ),  ActorRef.noSender());
+    }
+
+    public void addClient(String clientName) {
+        if (!initialized) {
+            System.out.printf(
+                    "[Network Manager] %s Operation for client=%s failed: %s%n",
+                    "ADD_CLIENT", clientName, "network not initialized"
+            );
+            return;
+        }
+        if (clients.containsKey(clientName)) {
+            System.out.printf(
+                    "[Network Manager] %s Operation for client=%s failed: %s%n",
+                    "ADD_CLIENT", clientName, "client already in network"
+            );
+            return;
+        }
+        clients.put(clientName,
+            system.actorOf(Client.props(parameters.delays, parameters.replication), clientName)
+        );
+        System.out.printf(
+                "[Network Manager] %s Operation for client=%s succeed%n",
+                "ADD_CLIENT", clientName
+        );
+    }
+
+    public void removeClient(String clientName) {
+        if (!initialized) {
+            System.out.printf(
+                    "[Network Manager] %s Operation for client=%s failed: %s%n",
+                    "REMOVE_CLIENT", clientName, "network not initialized"
+            );
+            return;
+        }
+        if (!clients.containsKey(clientName)) {
+            System.out.printf(
+                    "[Network Manager] %s Operation for client=%s failed: %s%n",
+                    "REMOVE_CLIENT", clientName, "client not in network"
+            );
+            return;
+        }
+        ActorRef client = clients.get(clientName);
+        system.stop(client);
+        clients.remove(clientName);
+        System.out.printf(
+                "[Network Manager] %s Operation for client=%s succeed%n",
+                "RECOVER", clientName
+        );
+    }
 
 
     public void terminate() {
