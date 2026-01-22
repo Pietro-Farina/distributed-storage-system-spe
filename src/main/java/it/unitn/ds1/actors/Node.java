@@ -663,9 +663,9 @@ public class Node extends AbstractActor {
      */
     private void onReadDataResponseMsg(Messages.ReadDataResponseMsg readDataResponseMsg) {
         // Get joining operation
-        final Operation joiningOperation = coordinatorOperations.get(readDataResponseMsg.operationUid);
+        final Operation operation = coordinatorOperations.get(readDataResponseMsg.operationUid);
 
-        if (joiningOperation == null) {
+        if (operation == null) {
             return; // stale message
         }
 
@@ -692,9 +692,9 @@ public class Node extends AbstractActor {
                             storage.put(ref.dataKey(), perKeyReadOp.chosenVersion);
                         }
                     }
-                    joiningOperation.quorumTracker.onOk(ref.dataKey());
+                    operation.quorumTracker.onOk(ref.dataKey());
                 } else {
-                    joiningOperation.quorumTracker.onBusy(ref.dataKey());
+                    operation.quorumTracker.onBusy(ref.dataKey());
                 }
 
                 // This operation is not needed anymore, it can be closed
@@ -702,28 +702,28 @@ public class Node extends AbstractActor {
             }
         }
 
-        boolean isRecover = joiningOperation.operationType.equals("RECOVER");
-        if (!joiningOperation.quorumTracker.done()) {
-            logEvent(new Outcome(joiningOperation.operationUid.toString(), joiningOperation.operationType, -1, -1,
+        boolean isRecover = operation.operationType.equals("RECOVER");
+        if (!operation.quorumTracker.done()) {
+            logEvent(new Outcome(operation.operationUid.toString(), operation.operationType, -1, -1,
                     isRecover ? "INT_RECOVER_PER_KEY_PROGRESS" : "INT_JOIN_PER_KEY_PROGRESS", true));
             return;
         }
 
-        if (joiningOperation.quorumTracker.hasQuorum()) {
-            if (joiningOperation.operationType.equals("JOIN")) {
+        if (operation.quorumTracker.hasQuorum()) {
+            if (operation.operationType.equals("JOIN")) {
                 finishJoinSuccess(readDataResponseMsg.operationUid);
-                logEvent(new Outcome(joiningOperation.operationUid.toString(), joiningOperation.operationType, -1, -1, "DEC_JOIN_SUCCESS", true));
+                logEvent(new Outcome(operation.operationUid.toString(), operation.operationType, -1, -1, "DEC_JOIN_SUCCESS", true));
             } else {
                 finishRecoverSuccess(readDataResponseMsg.operationUid);
-                logEvent(new Outcome(joiningOperation.operationUid.toString(), joiningOperation.operationType, -1, -1, "DEC_RECOVER_SUCCESS", true));
+                logEvent(new Outcome(operation.operationUid.toString(), operation.operationType, -1, -1, "DEC_RECOVER_SUCCESS", true));
             }
         } else {
-            if (joiningOperation.operationType.equals("JOIN")) {
+            if (operation.operationType.equals("JOIN")) {
                 finishJoinFail(readDataResponseMsg.operationUid);
-                logEvent(new Outcome(joiningOperation.operationUid.toString(), joiningOperation.operationType, -1, -1, "DEC_JOIN_FAIL", false));
+                logEvent(new Outcome(operation.operationUid.toString(), operation.operationType, -1, -1, "DEC_JOIN_FAIL", false));
             } else {
                 finishRecoverFail(readDataResponseMsg.operationUid, "per-item read quorum not reached"); // mirror of join fail (stop or retry policy)
-                logEvent(new Outcome(joiningOperation.operationUid.toString(), joiningOperation.operationType, -1, -1, "DEC_RECOVER_FAIL", false));
+                logEvent(new Outcome(operation.operationUid.toString(), operation.operationType, -1, -1, "DEC_RECOVER_FAIL", false));
             }
         }
     }
@@ -756,8 +756,8 @@ public class Node extends AbstractActor {
 
         // Update the requirement for the joining Operations
         // We need to reach r-quorum for each key
-        final Operation joiningOperation = coordinatorOperations.get(responseDataMsg.operationUid);
-        joiningOperation.quorumTracker.setQuorumRequirements(
+        final Operation operation = coordinatorOperations.get(responseDataMsg.operationUid);
+        operation.quorumTracker.setQuorumRequirements(
                 responseDataMsg.requestedData.keySet(),
                 responseDataMsg.requestedData.size()
         );
@@ -767,11 +767,11 @@ public class Node extends AbstractActor {
             // define the current responsible nodes for holding the key, note the joining node is not the network yet
             // The recovering node instead is already in the network -> we need to remove it before
             NavigableMap<Integer, ActorRef> ring = this.network;
-            if (joiningOperation.operationType.equals("RECOVER")) {
+            if (operation.operationType.equals("RECOVER")) {
                 ring = new TreeMap<>(this.network);
                 ring.remove(this.id);
             }
-            final Set<Integer> responsibleNodesKeys = joiningOperation.operationType.equals("JOIN") ?
+            final Set<Integer> responsibleNodesKeys = operation.operationType.equals("JOIN") ?
                     getResponsibleNodesKeys(network, item.getKey(), replicationParameters.N) :
                     getResponsibleNodesKeys(ring, item.getKey(), replicationParameters.N);
 
@@ -806,7 +806,7 @@ public class Node extends AbstractActor {
             Messages.ReadDataRequestMsg requestMsg = new Messages.ReadDataRequestMsg(
                     responseDataMsg.operationUid,
                     item.getValue(),
-                    joiningOperation.operationType.equals("RECOVER")
+                    operation.operationType.equals("RECOVER")
             );
 
             ActorRef node = network.get(item.getKey());
@@ -1054,6 +1054,7 @@ public class Node extends AbstractActor {
 
         // start timer
         recoveryOperation.timer = scheduleTimeout(replicationParameters.T, operationUid, -1);
+        logEvent(new Outcome(bootstrapRequestMsg.operationUid.toString(), "RECOVER", -1, -1, "INT_RECOVER_START", true));
     }
 
     private void finishRecoverSuccess(OperationUid operationUid) {
