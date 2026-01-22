@@ -30,8 +30,10 @@ public class Operation {
     public void onOkResponse(int nodeKey, DataItem item) {
         quorumTracker.onOk(nodeKey);
 
-        if (chosenVersion == null ||
-                (item != null && chosenVersion.getVersion() < item.getVersion())) {
+        // Do NOT poison chosenVersion with null replies
+        if (item == null) return;
+
+        if (chosenVersion == null || item.getVersion() > chosenVersion.getVersion()) {
             chosenVersion = item;
         }
     }

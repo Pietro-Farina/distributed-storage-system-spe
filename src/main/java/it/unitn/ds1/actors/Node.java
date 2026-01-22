@@ -1219,11 +1219,15 @@ public class Node extends AbstractActor {
         List<Interval> intervals = computeResponsibilityIntervals(this.id, replicationParameters.N, network);
         for (Map.Entry<Integer, DataItem> entry : storage.entrySet()) {
             int key =  entry.getKey();
+            boolean responsible = false; // if the node is not responsible anymore drop the key
             for (Interval interval : intervals) {
-                if (!interval.contains(key)) { // if the node is not responsible anymore drop the key
-                    itemsToDrop.add(key);
+                if (interval.contains(key)) {
+                    responsible = true;
                     break;
                 }
+            }
+            if (!responsible) {
+                itemsToDrop.add(key);
             }
         }
         return itemsToDrop;
