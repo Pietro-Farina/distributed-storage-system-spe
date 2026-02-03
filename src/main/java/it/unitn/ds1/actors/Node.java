@@ -624,10 +624,8 @@ public class Node extends AbstractActor {
                     operation.operationType.equals("RECOVER") ? "DEC_RECOVER_SUCCESS" : "DEC_JOIN_SUCCESS", true));
             return;
         }
-        startReadingPhase(responseDataMsg); // R-quorum on each key
-        logEvent(new Outcome(responseDataMsg.operationUid.toString(),
-                operation.operationType.equals("RECOVER") ? "RECOVER" : "JOIN", -1, -1,
-                operation.operationType.equals("RECOVER") ? "INT_RECOVER_PER_KEY_READ_START" : "INT_JOIN_PER_KEY_READ_START", true));
+        final Outcome outcome = startReadingPhase(responseDataMsg); // R-quorum on each key
+        logEvent(outcome);
     }
 
     /**
@@ -751,29 +749,25 @@ public class Node extends AbstractActor {
      * data we actually need from each node.
      * @param responseDataMsg from the Successor Node of the Joining/Recovering Node
      */
-    private void startReadingPhase(Messages.ResponseDataMsg responseDataMsg) {;
+    private Outcome startReadingPhase(Messages.ResponseDataMsg responseDataMsg) {;
         final Map<Integer, List<KeyOperationRef>> dataToAskPerNodeKey = new HashMap<>();
 
         // Update the requirement for the joining Operations
         // We need to reach r-quorum for each key
-        final Operation operation = coordinatorOperations.get(responseDataMsg.operationUid);
+        final Operation operation = coordinatorOperations.get(responseDataMsg.operationUid); // already checked is not null
         operation.quorumTracker.setQuorumRequirements(
                 responseDataMsg.requestedData.keySet(),
                 responseDataMsg.requestedData.size()
         );
+        final boolean isRecover = operation.operationType.equals("RECOVER");
 
         // Create a per-item quorum
         for (Map.Entry<Integer, DataItem> item : responseDataMsg.requestedData.entrySet()) {
-            // define the current responsible nodes for holding the key, note the joining node is not the network yet
-            // The recovering node instead is already in the network -> we need to remove it before
+            // Replica placement must be computed on the "correct" ring:
+            // - JOIN: current ring (joiner not in network yet) -> where the replicas *currently* are
+            // - RECOVER: current ring INCLUDING self -> replica set definition doesn't change due to crash
             NavigableMap<Integer, ActorRef> ring = this.network;
-            if (operation.operationType.equals("RECOVER")) {
-                ring = new TreeMap<>(this.network);
-                ring.remove(this.id);
-            }
-            final Set<Integer> responsibleNodesKeys = operation.operationType.equals("JOIN") ?
-                    getResponsibleNodesKeys(network, item.getKey(), replicationParameters.N) :
-                    getResponsibleNodesKeys(ring, item.getKey(), replicationParameters.N);
+            final Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(network, item.getKey(), replicationParameters.N);
 
             // Create the dedicated operation
             final OperationUid perKeyReadOpUid = nextOperationUid();
@@ -790,10 +784,41 @@ public class Node extends AbstractActor {
             // We do not start the timer as there is already one for the joining
 
             // We already have the data of the successor node
-            perKeyReadOp.onOkResponse(responseDataMsg.senderKey, item.getValue());
+            if (item.getValue() == null) {
+                perKeyReadOp.onBusyResponse(responseDataMsg.senderKey);
+            } else {
+                perKeyReadOp.onOkResponse(responseDataMsg.senderKey, item.getValue());
+            }
+            // In the recover case we must invalidate our data as it could be stale
+            if (responsibleNodesKeys.contains(this.id)) {
+                perKeyReadOp.onBusyResponse(this.id);
+            }
+
+            // If R==1, we can close this per-key op immediately without sending messages
+            if (perKeyReadOp.quorumTracker.done()) {
+                // what does it mean done? That I should perform the step but only if all messages are saved.
+                if (perKeyReadOp.quorumTracker.hasQuorum()) {
+                    if (perKeyReadOp.chosenVersion != null) {
+                        DataItem currentItem = storage.get(item.getKey());
+
+                        // the version I got might still be smaller than previous
+                        if (currentItem == null || currentItem.getVersion() < perKeyReadOp.chosenVersion.getVersion()) {
+                            storage.put(item.getKey(), perKeyReadOp.chosenVersion);
+                        }
+                    }
+                    operation.quorumTracker.onOk(item.getKey());
+                } else {
+                    operation.quorumTracker.onBusy(item.getKey());
+                }
+
+                // This operation is not needed anymore, it can be closed and we don't have to add nodes
+                coordinatorOperations.remove(perKeyReadOpUid);
+                continue;
+            }
 
             // To avoid sending many different message we just send one for each node
             responsibleNodesKeys.remove(responseDataMsg.senderKey);  // don't ask the sender
+            responsibleNodesKeys.remove(this.id); // don't send to itself as we already invalidate the data
             for (int nodeKey : responsibleNodesKeys) {
                 dataToAskPerNodeKey
                         .computeIfAbsent(nodeKey, _ -> new ArrayList<>())
@@ -801,17 +826,41 @@ public class Node extends AbstractActor {
             }
         }
 
+        // Given the R=1 case we could be already completed for each data key, let's check
+        if (operation.quorumTracker.done()) {
+            if (operation.quorumTracker.hasQuorum()) {
+                if (operation.operationType.equals("JOIN")) {
+                    finishJoinSuccess(responseDataMsg.operationUid);
+                    return new Outcome(operation.operationUid.toString(), operation.operationType, -1, -1, "DEC_JOIN_SUCCESS", true);
+                } else {
+                    finishRecoverSuccess(responseDataMsg.operationUid);
+                    return new Outcome(operation.operationUid.toString(), operation.operationType, -1, -1, "DEC_RECOVER_SUCCESS", true);
+                }
+            } else {
+                if (operation.operationType.equals("JOIN")) {
+                    finishJoinFail(responseDataMsg.operationUid);
+                    return new Outcome(operation.operationUid.toString(), operation.operationType, -1, -1, "DEC_JOIN_FAIL", false);
+                } else {
+                    finishRecoverFail(responseDataMsg.operationUid, "per-item read quorum not reached"); // mirror of join fail (stop or retry policy)
+                    return new Outcome(operation.operationUid.toString(), operation.operationType, -1, -1, "DEC_RECOVER_FAIL", false);
+                }
+            }
+        }
+
         // Send the messages
-        for (Map.Entry<Integer, List<KeyOperationRef>> item : dataToAskPerNodeKey.entrySet()) {
+        for (Map.Entry<Integer, List<KeyOperationRef>> entry : dataToAskPerNodeKey.entrySet()) {
             Messages.ReadDataRequestMsg requestMsg = new Messages.ReadDataRequestMsg(
                     responseDataMsg.operationUid,
-                    item.getValue(),
-                    operation.operationType.equals("RECOVER")
+                    entry.getValue(),
+                    isRecover
             );
 
-            ActorRef node = network.get(item.getKey());
+            ActorRef node = network.get(entry.getKey());
             node.tell(requestMsg, self());
         }
+        return new Outcome(responseDataMsg.operationUid.toString(),
+                isRecover ? "RECOVER" : "JOIN", -1, -1,
+                isRecover ? "INT_RECOVER_PER_KEY_READ_START" : "INT_JOIN_PER_KEY_READ_START", true);
     }
 
     private void finishJoinSuccess(OperationUid joiningOperationUid) {
