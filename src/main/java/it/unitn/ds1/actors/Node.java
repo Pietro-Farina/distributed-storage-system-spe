@@ -9,6 +9,7 @@ import it.unitn.ds1.protocol.KeyOperationRef;
 import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.protocol.Operation;
 import it.unitn.ds1.utils.ApplicationConfig;
+import it.unitn.ds1.utils.DistributionRandomGenerator;
 import it.unitn.ds1.utils.OperationUid;
 import scala.PartialFunction;
 import scala.concurrent.duration.Duration;
@@ -52,10 +53,15 @@ public class Node extends AbstractActor {
     private long eventStartTime;
     // ------------------------------------------------ //
 
+    // ------------- for events purposes ------------- //
+    private final DistributionRandomGenerator random;
+    // ------------------------------------------------ //
+
     public Node(
             int id,
             ApplicationConfig.Replication replicationParameters,
-            ApplicationConfig.Delays delaysParameters){
+            ApplicationConfig.Delays delaysParameters,
+            long runSeed){
         this.id = id;
         this.replicationParameters = replicationParameters;
         this.delaysParameters = delaysParameters;
@@ -70,12 +76,13 @@ public class Node extends AbstractActor {
         this.uncertainUpdates = new HashMap<>();
 
         this.startTimes = new HashMap<>();
+        this.random = new DistributionRandomGenerator(runSeed, self().path().name());
     }
 
     static public Props props(
-            int id, ApplicationConfig.Replication replicationParameters, ApplicationConfig.Delays delaysParameters) {
+            int id, ApplicationConfig.Replication replicationParameters, ApplicationConfig.Delays delaysParameters, long runSeed) {
         return Props.create(Node.class, () -> new Node(
-                id, replicationParameters, delaysParameters));
+                id, replicationParameters, delaysParameters,  runSeed));
     }
 
     private void onJoinNetworkMsg(Messages.JoinNetworkMsg joinNetworkMsg) {
@@ -202,7 +209,7 @@ public class Node extends AbstractActor {
         // guard at coordinator (optional but recommended)
         // TODO write reasons of guard at coordinator
         if (!acquireCoordinatorGuard(dataKey)) {
-            getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY", operationUid, "UPDATE", dataKey), self());
+            sendNetworkDelayedMessage(self(), getSender(), new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY", operationUid, "UPDATE", dataKey));
             return new Outcome(operationUid.toString(), "UPDATE", dataKey, -1, "INT_UPDATE_START", false);
         }
 
@@ -258,7 +265,7 @@ public class Node extends AbstractActor {
                     null,
                     updateRequestMsg.operationUid,
                     this.id);
-            coordinator.tell(responseMsg, self());
+            sendNetworkDelayedMessage(self(), coordinator, responseMsg);
             return new Outcome(updateRequestMsg.operationUid.toString(), "UPDATE", dataKey, -1, "INT_UPDATE_REPLICA_LOCK", false);
         }
 
@@ -270,7 +277,7 @@ public class Node extends AbstractActor {
                 currentDataItem,
                 updateRequestMsg.operationUid,
                 this.id);
-        coordinator.tell(responseMsg, self());
+        sendNetworkDelayedMessage(self(), coordinator, responseMsg);
 
         // setup Timeout for the request
         lockTimers.put(
@@ -297,7 +304,7 @@ public class Node extends AbstractActor {
         // reply to client and multicast to other replicas
         Messages.UpdateResultMsg resultMsg = new Messages.UpdateResultMsg(
                 -1, operation.dataKey, committedDataItem, operation.operationUid);
-        operation.client.tell(resultMsg, self());
+        sendNetworkDelayedMessage(self(), operation.client, resultMsg);
         multicastMessage(responsibleNodesKeys, resultMsg);
 
         // cleanup: free locks and cancel timer
@@ -315,7 +322,7 @@ public class Node extends AbstractActor {
         }
 
         // send the error to the client
-        operation.client.tell(new Messages.ErrorMsg(reason, operation.operationUid, "UPDATE", operation.dataKey), self());
+        sendNetworkDelayedMessage(self(), operation.client, new Messages.ErrorMsg(reason, operation.operationUid, "UPDATE", operation.dataKey));
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
@@ -324,7 +331,7 @@ public class Node extends AbstractActor {
     private Outcome startGetAsCoordinator(int dataKey) {
         OperationUid operationUid = nextOperationUid();
         if (!acquireCoordinatorGuard(dataKey)) {
-            getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY", operationUid, "GET", dataKey), self());
+            sendNetworkDelayedMessage(self(), getSender(), new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY", operationUid, "GET", dataKey));
             return new Outcome(operationUid.toString(), "GET", dataKey, -1, "INT_GET_START", false);
         }
         Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(network, dataKey, replicationParameters.N);
@@ -387,7 +394,7 @@ public class Node extends AbstractActor {
                     getRequestMsg.operationUid,
                     null,
                     this.id);
-            coordinator.tell(responseMsg, self());
+            sendNetworkDelayedMessage(self(), coordinator, responseMsg);
             return new Outcome(getRequestMsg.operationUid.toString(), "GET", dataKey, -1, "INT_GET_REPLICA_REPLY", false);
         }
 
@@ -398,7 +405,7 @@ public class Node extends AbstractActor {
                 getRequestMsg.operationUid,
                 currentDataItem,
                 this.id);
-        coordinator.tell(responseMsg, self());
+        sendNetworkDelayedMessage(self(), coordinator, responseMsg);
 
         // We can free the lock
         releaseReplicaLock(dataKey);
@@ -413,7 +420,7 @@ public class Node extends AbstractActor {
         // reply to client
         Messages.GetResultMsg resultMsg = new Messages.GetResultMsg(
                 operation.operationUid, operation.dataKey, chosenVersion);
-        operation.client.tell(resultMsg, self());
+        sendNetworkDelayedMessage(self(), operation.client, resultMsg);
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
@@ -422,7 +429,7 @@ public class Node extends AbstractActor {
 
     private void finishGetFail(Operation operation, String reason) {
         // send the error to the client
-        operation.client.tell(new Messages.ErrorMsg(reason, operation.operationUid, "GET", operation.dataKey), self());
+        sendNetworkDelayedMessage(self(), operation.client, new Messages.ErrorMsg(reason, operation.operationUid, "GET", operation.dataKey));
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
@@ -520,7 +527,7 @@ public class Node extends AbstractActor {
         Messages.BootstrapRequestMsg bootstrapRequestMsg = new Messages.BootstrapRequestMsg(
                 operationUid,
                 false);
-        startJoinMsg.bootstrapNode.tell(bootstrapRequestMsg, self());
+        sendNetworkDelayedMessage(self(), startJoinMsg.bootstrapNode, bootstrapRequestMsg);
 
         operation.timer = scheduleTimeout(replicationParameters.T, operationUid, -1);
         logEvent(new Outcome(operationUid.toString(), "JOIN", -1, -1, "INT_JOIN_START", true));
@@ -536,7 +543,7 @@ public class Node extends AbstractActor {
                 bootstrapRequestMsg.operationUid,
                 this.network
         );
-        sender().tell(responseMsg, self());
+        sendNetworkDelayedMessage(self(), sender(), responseMsg);
         boolean isRecover = bootstrapRequestMsg.isRecover;
         logEvent(new Outcome(bootstrapRequestMsg.operationUid.toString(),
                 isRecover ? "RECOVER" : "JOIN_RECOVER", -1, -1,
@@ -566,7 +573,7 @@ public class Node extends AbstractActor {
                 this.id,
                 operation.operationType.equals("RECOVER")
         );
-        successorNode.tell(requestMsg, self());
+        sendNetworkDelayedMessage(self(), successorNode, requestMsg);
         boolean isRecover = operation.operationType.equals("RECOVER");
         logEvent(new Outcome(bootstrapResponseMsg.operationUid.toString(),
                 isRecover ? "RECOVER" : "JOIN",
@@ -594,7 +601,7 @@ public class Node extends AbstractActor {
                 requestedData,
                 this.id
         );
-        sender().tell(responseMsg, self());
+        sendNetworkDelayedMessage(self(), sender(), responseMsg);
         logEvent(new Outcome(requestDataMsg.operationUid.toString(),
                 requestDataMsg.isRecover ? "RECOVER" : "JOIN",
                 -1, -1,
@@ -647,7 +654,7 @@ public class Node extends AbstractActor {
                 requestedData,
                 this.id
         );
-        sender().tell(responseMsg, self());
+        sendNetworkDelayedMessage(self(), sender(), responseMsg);
         boolean isRecover = readDataRequestMsg.isRecover;
         logEvent(new Outcome(readDataRequestMsg.operationUid.toString(),
                 isRecover ? "RECOVER" : "JOIN_OR_RECOVER", -1, -1,
@@ -856,7 +863,7 @@ public class Node extends AbstractActor {
             );
 
             ActorRef node = network.get(entry.getKey());
-            node.tell(requestMsg, self());
+            sendNetworkDelayedMessage(self(), node, requestMsg);
         }
         return new Outcome(responseDataMsg.operationUid.toString(),
                 isRecover ? "RECOVER" : "JOIN", -1, -1,
@@ -930,7 +937,7 @@ public class Node extends AbstractActor {
 
         // Send Acknowledgment
         Messages.LeaveAckMsg ack = new Messages.LeaveAckMsg(leaveWarningMsg.leavingOperationUid, this.id);
-        sender().tell(ack, self());
+        sendNetworkDelayedMessage(self(), sender(), ack);
 
         // Should I have a timer? -> No because node can leave on at a time when there are no operations
         logEvent(new Outcome(leaveWarningMsg.leavingOperationUid.toString(), "LEAVE", -1, -1, "INT_LEAVE_WARNING_RECEIVED", true));
@@ -1041,7 +1048,7 @@ public class Node extends AbstractActor {
             );
 
             ActorRef node = network.get(entry.getKey());
-            node.tell(leaveWarningMsg, self());
+            sendNetworkDelayedMessage(self(), node, leaveWarningMsg);
         }
 
         // Start the timer
@@ -1099,7 +1106,7 @@ public class Node extends AbstractActor {
                 operationUid,
                 true
         );
-        startRecoveryMsg.bootstrapNode.tell(bootstrapRequestMsg, self());
+        sendNetworkDelayedMessage(self(), startRecoveryMsg.bootstrapNode, bootstrapRequestMsg);
 
         // start timer
         recoveryOperation.timer = scheduleTimeout(replicationParameters.T, operationUid, -1);
@@ -1174,8 +1181,25 @@ public class Node extends AbstractActor {
     private void multicastMessage(Set<Integer> recipientNodes, Serializable msg) {
         for (Integer nodeKey: recipientNodes) {
             ActorRef node = network.get(nodeKey);
-            node.tell(msg, self());
+            sendNetworkDelayedMessage(self(), node, msg);
         }
+    }
+
+    /**
+     * Send message with network delays
+     * @param sender
+     * @param receiver
+     * @param message
+     */
+    private void sendNetworkDelayedMessage(ActorRef sender, ActorRef receiver, Serializable message) {
+        long delayMs = random.shiftedExponentialDelayMs(5L, 1.0/15.0, 2000L);
+        getContext().system().scheduler().scheduleOnce(
+                Duration.create(delayMs, TimeUnit.MILLISECONDS),
+                receiver,
+                message,
+                getContext().system().dispatcher(),
+                sender
+        );
     }
 
     /**

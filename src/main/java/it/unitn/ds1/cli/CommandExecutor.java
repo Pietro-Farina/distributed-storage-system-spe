@@ -47,6 +47,10 @@ public class CommandExecutor {
 
             case Command.NodeRecover r ->
                     networkManager.recoverNode(r.nodeKey(), r.bootstrap());
+
+            case Command.ExperimentStart e -> networkManager.startExperiment();
+
+            case Command.ExperimentEnd e ->  networkManager.stopExperiment();
         }
     }
 }

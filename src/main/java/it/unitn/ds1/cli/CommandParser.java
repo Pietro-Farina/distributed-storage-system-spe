@@ -86,6 +86,14 @@ public final class CommandParser {
                             throw new IllegalArgumentException("Unknown command: " + tokens[0] + " " + tokens[1]);
                 };
 
+            case "simulation" ->
+                switch (tokens[1].toLowerCase()) {
+                    case "start" -> Optional.of((new Command.ExperimentStart()));
+                    case "end" -> Optional.of((new Command.ExperimentEnd()));
+                        default ->
+                            throw new IllegalArgumentException("Unknown command: " + tokens[0] + " " + tokens[1]);
+                };
+
             default ->
                     throw new IllegalArgumentException("Unknown command: " + tokens[0]);
         };

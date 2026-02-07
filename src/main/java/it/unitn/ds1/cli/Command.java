@@ -10,7 +10,9 @@ public sealed interface Command permits
         Command.NodeJoin,
         Command.NodeLeave,
         Command.NodeCrash,
-        Command.NodeRecover
+        Command.NodeRecover,
+        Command.ExperimentStart,
+        Command.ExperimentEnd
 {
     record Sleep(long millis) implements Command {
     }
@@ -39,4 +41,7 @@ public sealed interface Command permits
 
     record NodeRecover(int nodeKey, int bootstrap) implements Command {
     }
+
+    record ExperimentStart() implements Command {}
+    record ExperimentEnd() implements Command {}
 }

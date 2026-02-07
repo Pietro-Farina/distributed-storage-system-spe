@@ -5,6 +5,7 @@
   </component>
   <component name="JavacSettings">
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="distributed-storage-system-spe.main" options="-Xlint:deprecation" />
       <module name="distributed-storage-system.main" options="-Xlint:deprecation" />
     </option>
   </component>

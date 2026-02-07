@@ -2,6 +2,7 @@ package it.unitn.ds1;
 
 import akka.actor.*;
 import it.unitn.ds1.actors.Client;
+import it.unitn.ds1.actors.ExperimentCoordinator;
 import it.unitn.ds1.actors.Node;
 import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.utils.ApplicationConfig;
@@ -15,6 +16,11 @@ public class NetworkManager {
     private final ActorRef inbox;
     private Boolean initialized;
 
+    // ------------- for events purposes ------------- //
+    private final ActorRef experimentCoordinator;
+    private final boolean simulation = true;
+    // ------------------------------------------------ //
+
     // replication parameters -> Gave to the
     public final ApplicationConfig parameters;
 
@@ -25,6 +31,10 @@ public class NetworkManager {
         this.parameters = parameters;
         this.inbox = system.actorOf(ManagerInbox.props(this), "networkManagerInbox");
         this.initialized = false;
+        this.experimentCoordinator = system.actorOf(
+                ExperimentCoordinator.props(parameters, inbox, parameters.random.seed),
+                "experimentCoordinator"
+        );
     }
 
     /**
@@ -36,9 +46,9 @@ public class NetworkManager {
         // Add nodes to the system and create the same numbers of client (for bulk updates)
         int i = 0;
         for (Integer nodeKey : nodeKeysToAdd) {
-            network.put(nodeKey, system.actorOf(Node.props(nodeKey, parameters.replication, parameters.delays), "node_" + nodeKey));
+            network.put(nodeKey, system.actorOf(Node.props(nodeKey, parameters.replication, parameters.delays, parameters.random.seed), "node_" + nodeKey));
             String clientName =  "client" + ++i;
-            clients.put(clientName, system.actorOf(Client.props(parameters.delays, parameters.replication), clientName));
+            clients.put(clientName, system.actorOf(Client.props(parameters.delays, parameters.replication, experimentCoordinator, parameters.random.seed, parameters), clientName));
         }
 
         // Send join messages to the nodes to inform them of the whole network
@@ -48,6 +58,9 @@ public class NetworkManager {
         }
 
         this.initialized = true;
+        if (simulation) {
+            notifyExperimentCoordinator("INIT",  -1, true);
+        }
 
         if (dataToAdd.isEmpty() || clients.isEmpty()) return;
 
@@ -106,7 +119,7 @@ public class NetworkManager {
             );
             return;
         }
-        ActorRef newNode = system.actorOf(Node.props(newNodeKey, parameters.replication, parameters.delays), "node_" + newNodeKey);
+        ActorRef newNode = system.actorOf(Node.props(newNodeKey, parameters.replication, parameters.delays, parameters.random.seed), "node_" + newNodeKey);
         newNode.tell(new Messages.StartJoinMsg(newNodeKey, network.get(bootstrapNodeKey)), ActorRef.noSender());
     }
 
@@ -252,8 +265,9 @@ public class NetworkManager {
             return;
         }
         clients.put(clientName,
-            system.actorOf(Client.props(parameters.delays, parameters.replication), clientName)
+            system.actorOf(Client.props(parameters.delays, parameters.replication, experimentCoordinator, parameters.random.seed, parameters), clientName)
         );
+        notifyExperimentCoordinator("NEW_CLIENT",  -1, true);
         System.out.printf(
                 "[Network Manager] %s Operation for client=%s succeed%n",
                 "ADD_CLIENT", clientName
@@ -289,7 +303,36 @@ public class NetworkManager {
         system.terminate();
     }
 
+    public void startExperiment() {
+        if (!initialized) {
+            System.out.printf(
+                    "[Network Manager] %s Operation failed: %s%n",
+                    "START_EXPERIMENT", "network not initialized"
+            );
+            return;
+        }
+        notifyExperimentCoordinator("START_EXPERIMENT", -1, true);
+    }
+
+    public void stopExperiment() {
+        notifyExperimentCoordinator("STOP_EXPERIMENT", -1, true);
+    }
+
     // ------------ HELPERS FOR HAVING UPDATED RING ON DATA MANAGER ------------ //
+    private void notifyExperimentCoordinator(String operationType, int nodeKey, boolean success) {
+        if (simulation) {
+            experimentCoordinator.tell(
+                    new Messages.ResultMembershipOperationMsg(
+                            this.network,
+                            this.clients,
+                            operationType,
+                            nodeKey,
+                            success
+                    ),
+                    ActorRef.noSender()
+            );
+        }
+    }
     /**
      * The following functions are implemented as follows since we are under the assumptions that
      * "Nodes join and leave, crash and recover one at a time, and only when there are no ongoing operations".
@@ -297,10 +340,35 @@ public class NetworkManager {
      */
 
     // called only by the inbox actor (single-threaded), but keep synchronized for safety
-    synchronized void onJoin(int key, ActorRef ref) { network.put(key, ref); }
-    synchronized void onLeave(int key) { network.remove(key); }
-    synchronized void onCrash(int key) { /* keep membership; optionally track a status map */ }
-    synchronized void onRecover(int key, ActorRef ref) { network.put(key, ref); }
+    synchronized void onJoin(int key, ActorRef ref) {
+        network.put(key, ref);
+        notifyExperimentCoordinator("JOIN", key, true);
+    }
+    synchronized void onLeave(int key) {
+        network.remove(key);
+        notifyExperimentCoordinator("LEAVE", key, true);
+    }
+    synchronized void onCrash(int key) { /* keep membership; optionally track a status map */
+        notifyExperimentCoordinator("CRASH", key, true);
+    }
+    synchronized void onRecover(int key, ActorRef ref) {
+        network.put(key, ref);
+        notifyExperimentCoordinator("RECOVER", key, true);
+    }
+
+    synchronized void onRequestMembershipOperationMsg(Messages.RequestMembershipOperationMsg msg) {
+        switch (msg.operationType) {
+            case "JOIN" -> addNode(msg.nodeKey, msg.bootstrapNodeKey);
+            case "LEAVE" -> removeNode(msg.nodeKey);
+            case "RECOVER" -> recoverNode(msg.nodeKey, msg.bootstrapNodeKey);
+            case "CRASH" -> crashNode(msg.nodeKey);
+            case "TERMINATE_EXPERIMENT" -> {}
+            default -> System.out.printf(
+                    "[Network Manager] %s Operation failed: %s%n",
+                    msg.operationType, "operation not supported"
+            );
+        }
+    }
 
     // for your helpers/UI/tests
     public synchronized NavigableMap<Integer, ActorRef> snapshot(){ return new TreeMap<>(network); }
@@ -321,6 +389,7 @@ public class NetworkManager {
                     .match(Messages.ManagerNotifyLeave.class,m -> networkManager.onLeave(m.nodeKey))
                     .match(Messages.ManagerNotifyCrash.class,m -> networkManager.onCrash(m.nodeKey))
                     .match(Messages.ManagerNotifyRecover.class,m -> networkManager.onRecover(m.nodeKey, sender()))
+                    .match(Messages.RequestMembershipOperationMsg.class, networkManager::onRequestMembershipOperationMsg)
                     .build();
         }
     }

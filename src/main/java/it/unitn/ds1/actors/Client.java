@@ -1,16 +1,24 @@
 package it.unitn.ds1.actors;
 
 import akka.actor.AbstractActor;
+import akka.actor.ActorRef;
 import akka.actor.Props;
 import it.unitn.ds1.logging.AsyncRunLogger;
 import it.unitn.ds1.logging.LogModels;
 import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.utils.ApplicationConfig;
+import it.unitn.ds1.utils.DistributionRandomGenerator;
 import it.unitn.ds1.utils.OperationUid;
+import scala.Array;
+import scala.concurrent.duration.Duration;
 
+import java.io.Serializable;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Map;
+import java.util.NavigableMap;
+import java.util.concurrent.TimeUnit;
 
 /*
     The clients execute commands passed through messages, print the reply from the
@@ -18,6 +26,7 @@ import java.util.Deque;
     read and write operations
  */
 public class Client extends AbstractActor {
+    private ApplicationConfig parameters;
     private ApplicationConfig.Delays delaysParameters;
     private int opCounter;
     private boolean busy;
@@ -33,16 +42,27 @@ public class Client extends AbstractActor {
     private final ApplicationConfig.Replication replicationParameters;
     // ------------------------------------------------ //
 
-    public Client(ApplicationConfig.Delays delaysParameters, ApplicationConfig.Replication replicationParameters) {
+    // ------------- for events purposes ------------- //
+    private Map<Integer, ActorRef> currentNodes;
+    private final ActorRef experimentCoordinator;
+    private boolean paused;
+    private final DistributionRandomGenerator random;
+    // ------------------------------------------------ //
+
+    public Client(ApplicationConfig.Delays delaysParameters, ApplicationConfig.Replication replicationParameters, ActorRef experimentCoordinator, long runSeed, ApplicationConfig parameters) {
+        this.parameters = parameters;
         this.delaysParameters = delaysParameters;
         this.replicationParameters = replicationParameters;
+        this.experimentCoordinator = experimentCoordinator;
+        this.random = new DistributionRandomGenerator(runSeed, self().path().name());
         opCounter = 0;
         busy = false;
         pending = new ArrayDeque<>();
+        paused = false;
     }
 
-    static public Props props(ApplicationConfig.Delays delaysParameters, ApplicationConfig.Replication replicationParameters) {
-        return Props.create(Client.class, () -> new Client(delaysParameters, replicationParameters));
+    static public Props props(ApplicationConfig.Delays delaysParameters, ApplicationConfig.Replication replicationParameters, ActorRef experimentCoordinator, long runSeed, ApplicationConfig parameters) {
+        return Props.create(Client.class, () -> new Client(delaysParameters, replicationParameters, experimentCoordinator, runSeed, parameters));
     }
 
     /**
@@ -59,6 +79,10 @@ public class Client extends AbstractActor {
             );
             return;
         }
+        if (paused) {
+            experimentCoordinator.tell(new Messages.ClientIdleMsg(), getSelf());
+            return;
+        }
         onStartOperation();
         busy = true;
         opCounter++;
@@ -67,7 +91,7 @@ public class Client extends AbstractActor {
                 startUpdateMsg.dataKey,
                 startUpdateMsg.value
         );
-        startUpdateMsg.node.tell(requestMsg, getSelf());
+        sendNetworkDelayedMessage(getSelf(), startUpdateMsg.node, requestMsg);
 
         // I DON'T PUT TIMEOUT BECAUSE WE ARE UNDER ASSUMPTIONS OF RELIABLE NETWORK
         // Otherwise we would have a timeout to avoid being indefinitely busy
@@ -87,6 +111,10 @@ public class Client extends AbstractActor {
             );
             return;
         }
+        if (paused) {
+            experimentCoordinator.tell(new Messages.ClientIdleMsg(), getSelf());
+            return;
+        }
         onStartOperation();
         busy = true;
         opCounter++;
@@ -94,7 +122,7 @@ public class Client extends AbstractActor {
         Messages.GetRequestMsg requestMsg = new Messages.GetRequestMsg(
                 startGetMsg.dataKey
         );
-        startGetMsg.node.tell(requestMsg, getSelf());
+        sendNetworkDelayedMessage(getSelf(), startGetMsg.node, requestMsg);
 
         // I DON'T PUT TIMEOUT BECAUSE WE ARE UNDER ASSUMPTIONS OF RELIABLE NETWORK
         // Otherwise we would have a timeout to avoid being indefinitely busy
@@ -120,6 +148,7 @@ public class Client extends AbstractActor {
         busy = false;
 
         processNextIfIdle();
+        scheduleNext();
     }
 
     private void onErrorMsg(Messages.ErrorMsg errorMsg) {
@@ -131,6 +160,7 @@ public class Client extends AbstractActor {
         busy = false;
 
         processNextIfIdle();
+        scheduleNext();
     }
 
     // Always enqueue (for simulation purposes)
@@ -198,6 +228,79 @@ public class Client extends AbstractActor {
     }
     // --------------------------------------------------------- //
 
+    // ------------ EXPERIMENT COORDINATOR ------------ //
+    private void scheduleNext() {
+        if (busy) return;
+        if (paused) {
+            experimentCoordinator.tell(new Messages.ClientIdleMsg(), getSelf());
+            return;
+        }
+
+        // choose key
+        int dataKey = random.zipf(parameters.ring.keySpace, 1.0);
+
+        // choose operation
+        boolean isRead = random.bernoulli(0.7);
+
+        // choose node
+        Integer[] nodeKeys = currentNodes.keySet().toArray(new Integer[0]);
+        double[] initialWeights = new double[nodeKeys.length];
+        java.util.Arrays.fill(initialWeights, 1.0);
+
+        int nodeKey = random.weightedChoice(nodeKeys, initialWeights);
+        ActorRef node = currentNodes.get(nodeKey);
+
+        // choose delay
+        double lambdaOpsPerSec = 1.0;              // example: 1 op / second / client
+        double lambdaPerMs = lambdaOpsPerSec / 1000.0;
+
+        long delayMs = random.poissonInterArrivalMs(lambdaPerMs, /*min*/ 1L, /*max*/ 2000L);
+
+        getContext().system().scheduler().scheduleOnce(
+                Duration.create(delayMs, TimeUnit.MILLISECONDS),
+                getSelf(),
+                isRead ?
+                        new Messages.StartGetMsg(
+                                dataKey, node
+                        )
+                :
+                        new Messages.StartUpdateMSg(
+                                dataKey, self().path().name() + (this.opCounter + 1), node
+                        ),
+                getContext().system().dispatcher(),
+                getSelf()
+        );
+    }
+
+    private void onPauseOperationMsg(Messages.PauseOperationsMsg pauseOperationsMsg) {
+        this.paused = true;
+        if (!busy) {
+            experimentCoordinator.tell(new Messages.ClientIdleMsg(), getSelf());
+        }
+    }
+
+    private void onResumeOperationMsg(Messages.ResumeOperationsMsg resumeOperationsMsg) {
+        this.paused = false;
+        this.currentNodes = resumeOperationsMsg.network;
+        scheduleNext();
+    }
+
+    /**
+     * Send message with network delays
+     * @param sender
+     * @param receiver
+     * @param message
+     */
+    private void sendNetworkDelayedMessage(ActorRef sender, ActorRef receiver, Serializable message) {
+        long delayMs = random.shiftedExponentialDelayMs(5L, 1.0/15.0, 2000L);
+        getContext().system().scheduler().scheduleOnce(
+                Duration.create(delayMs, TimeUnit.MILLISECONDS),
+                receiver,
+                message,
+                getContext().system().dispatcher(),
+                sender
+        );
+    }
 
     // Mapping between the received message types and our actor methods
     @Override
@@ -212,6 +315,9 @@ public class Client extends AbstractActor {
                 .match(Messages.UpdateResultMsg.class, this::onUpdateResultMsg)
                 .match(Messages.GetResultMsg.class, this::onGetResultMsg)
                 .match(Messages.ErrorMsg.class, this::onErrorMsg)
+                // Communication with Experiment Coordinator
+                .match(Messages.PauseOperationsMsg.class, this::onPauseOperationMsg)
+                .match(Messages.ResumeOperationsMsg.class, this::onResumeOperationMsg)
                 .build();
     }
 }

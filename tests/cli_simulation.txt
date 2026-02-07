@@ -1,0 +1,36 @@
+########################################
+# CLI FULL COMMAND TEST
+# This script tests ALL supported commands
+########################################
+
+# ---- basic control ----
+sleep 200
+
+########################################
+# Network initialization
+########################################
+
+# Initialize the network with three nodes
+init 10 20 30 40 50
+
+sleep 500
+
+########################################
+# Client management
+########################################
+
+# Create two clients
+client create client1
+client create client2
+client create client3
+client create client4
+
+sleep 200
+
+simulation start
+
+sleep 100000
+
+simulation end
+
+exit

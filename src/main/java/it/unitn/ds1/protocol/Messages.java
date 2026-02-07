@@ -333,4 +333,41 @@ public class Messages {
     public static final class ManagerNotifyLeave implements Serializable { public final int nodeKey; public ManagerNotifyLeave(int k){nodeKey = k;} }
     public static final class ManagerNotifyCrash implements Serializable { public final int nodeKey; public ManagerNotifyCrash(int k){nodeKey = k;} }
     public static final class ManagerNotifyRecover implements Serializable { public final int nodeKey; public ManagerNotifyRecover(int k){nodeKey = k;} }
+
+    // ------------ MESSAGES FOR EXPERIMENT COORDINATOR ------------ //
+    public static class PauseOperationsMsg implements Serializable {}
+    public static class ResumeOperationsMsg implements Serializable {
+        public final Map<Integer, ActorRef> network;
+
+        public ResumeOperationsMsg(Map<Integer, ActorRef> network) {
+            this.network = Collections.unmodifiableMap(new TreeMap<>(network));
+        }
+    }
+
+    public static class ClientIdleMsg implements Serializable {}
+    public static class RequestMembershipOperationMsg implements Serializable {
+        public final String operationType;
+        public final int nodeKey;
+        public final int bootstrapNodeKey;
+        public RequestMembershipOperationMsg(String operationType, int nodeKey, int bootstrapNodeKey) {
+            this.operationType = operationType;
+            this.nodeKey = nodeKey;
+            this.bootstrapNodeKey = bootstrapNodeKey;
+        }
+    }
+    public static class ResultMembershipOperationMsg implements Serializable {
+        public final Map<Integer, ActorRef> network;
+        public final Map<String, ActorRef> clients;
+        public final String operationType;
+        public final int nodeKey;
+        public final boolean success;
+
+        public ResultMembershipOperationMsg(Map<Integer, ActorRef> network, Map<String, ActorRef> clients, String operationType, int nodeKey, boolean success) {
+            this.network = Collections.unmodifiableMap(new TreeMap<>(network));
+            this.clients = Collections.unmodifiableMap(new TreeMap<>(clients));
+            this.operationType = operationType;
+            this.nodeKey = nodeKey;
+            this.success = success;
+        }
+    }
 }
