@@ -2,6 +2,7 @@ package it.unitn.ds1.actors;
 
 import akka.actor.AbstractActor;
 import akka.actor.ActorRef;
+import akka.actor.Cancellable;
 import akka.actor.Props;
 import it.unitn.ds1.logging.AsyncRunLogger;
 import it.unitn.ds1.logging.LogModels;
@@ -30,6 +31,9 @@ public class Client extends AbstractActor {
     private ApplicationConfig.Delays delaysParameters;
     private int opCounter;
     private boolean busy;
+
+    // To avoid locking when contacting a crashed node
+    private Cancellable operationTimer;
 
     // The following is used to enhanced simulation, to allows the networkManager
     // to quickly queue operations to client
@@ -93,8 +97,8 @@ public class Client extends AbstractActor {
         );
         sendNetworkDelayedMessage(getSelf(), startUpdateMsg.node, requestMsg);
 
-        // I DON'T PUT TIMEOUT BECAUSE WE ARE UNDER ASSUMPTIONS OF RELIABLE NETWORK
-        // Otherwise we would have a timeout to avoid being indefinitely busy
+        // I PUT TIMEOUT DUE TO POSSIBILITY TO CONTACT CRASHED NODE
+        operationTimer = scheduleTimeout();
     }
 
     /**
@@ -124,11 +128,13 @@ public class Client extends AbstractActor {
         );
         sendNetworkDelayedMessage(getSelf(), startGetMsg.node, requestMsg);
 
-        // I DON'T PUT TIMEOUT BECAUSE WE ARE UNDER ASSUMPTIONS OF RELIABLE NETWORK
-        // Otherwise we would have a timeout to avoid being indefinitely busy
+        // I PUT TIMEOUT DUE TO POSSIBILITY TO CONTACT CRASHED NODE
+        operationTimer = scheduleTimeout();
     }
 
     private void onUpdateResultMsg(Messages.UpdateResultMsg updateResultMsg) {
+        operationTimer.cancel();
+
         System.out.printf(
                 "[Client %s] Update completed for dataKey=%d -> value=\"%s\" (new version=%d)%n",
                 getSelf().path().name(), updateResultMsg.dataKey, updateResultMsg.value.getValue(), updateResultMsg.value.getVersion()
@@ -140,6 +146,8 @@ public class Client extends AbstractActor {
     }
 
     private void onGetResultMsg(Messages.GetResultMsg getResultMsg) {
+        operationTimer.cancel();
+
         System.out.printf(
                 "[Client %s] Get result: dataKey=%d -> value=\"%s\" (version=%d)%n",
                 getSelf().path().name(), getResultMsg.dataKey, getResultMsg.value.getValue(), getResultMsg.value.getVersion()
@@ -152,6 +160,8 @@ public class Client extends AbstractActor {
     }
 
     private void onErrorMsg(Messages.ErrorMsg errorMsg) {
+        operationTimer.cancel();
+
         System.out.printf(
                 "[Client %s] Operation failed: %s%n",
                 getSelf().path().name(), errorMsg.reason
@@ -161,6 +171,18 @@ public class Client extends AbstractActor {
 
         processNextIfIdle();
         scheduleNext();
+    }
+
+    private void onTimeout(ClientTimeout timeout) {
+        // stale timeout -> can happen if it fires as we cancel it
+        if (!busy) {
+            return;
+        }
+
+        System.out.printf(
+                "[Client %s] TIMEOUT! Coordinator did not respond.%n",
+                getSelf().path().name()
+        );
     }
 
     // Always enqueue (for simulation purposes)
@@ -204,6 +226,23 @@ public class Client extends AbstractActor {
                     getSelf().path().name(), intent.getClass().getSimpleName());
         }
     }
+
+    private Cancellable scheduleTimeout() {
+        // Avoid to fire
+        if (operationTimer!= null && !operationTimer.isCancelled()) {
+            operationTimer.cancel();
+        }
+        final long safetyTimeForExecution = 1000L;
+        final long timeoutTime = replicationParameters.T + (delaysParameters.delayMaxMs * 2) + safetyTimeForExecution;
+        return getContext().system().scheduler().scheduleOnce(
+                Duration.create(timeoutTime, TimeUnit.MILLISECONDS),
+                getSelf(),
+                new ClientTimeout(),
+                getContext().system().dispatcher(),
+                getSelf());
+    }
+
+    private class ClientTimeout implements Serializable {}
 
     // -------------- HELPER FUNCTION FOR LOGGING -------------- //
     private void onStartOperation() {
@@ -315,6 +354,7 @@ public class Client extends AbstractActor {
                 .match(Messages.UpdateResultMsg.class, this::onUpdateResultMsg)
                 .match(Messages.GetResultMsg.class, this::onGetResultMsg)
                 .match(Messages.ErrorMsg.class, this::onErrorMsg)
+                .match(ClientTimeout.class, this::onTimeout)
                 // Communication with Experiment Coordinator
                 .match(Messages.PauseOperationsMsg.class, this::onPauseOperationMsg)
                 .match(Messages.ResumeOperationsMsg.class, this::onResumeOperationMsg)

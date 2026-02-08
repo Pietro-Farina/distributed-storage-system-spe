@@ -16,10 +16,11 @@ public class LogModels {
         public final String phase;      // Substage of operation (COORD_START, QUORUM_OK, etc.) TODO definte the substage
         public final Long latencyMs;  // Duration of that phase or event TODO node start its timestamps and compute latency when before logging
         public final Boolean success;    // Whether the event completed successfully
+        public final String client;     // eventually the client that requested the operation
 
         public Event(String runId, Integer nodeId, String reqId,
                      String operation, Integer key, Integer version,
-                     String phase, Long latencyMs, Boolean success) {
+                     String phase, Long latencyMs, Boolean success, String client) {
             this.ts = Instant.now().toString();
             this.runId = runId;
             this.nodeId = nodeId;
@@ -30,6 +31,7 @@ public class LogModels {
             this.latencyMs = latencyMs;
             this.phase = phase;
             this.success = success;
+            this.client = client;
         }
 
         public String toJsonLine() {
@@ -44,7 +46,8 @@ public class LogModels {
                     .append("\"version\":").append(version==null?"null":version).append(',')
                     .append("\"phase\":").append(quote(phase)).append(',')
                     .append("\"latencyMs\":").append(latencyMs==null?"null":latencyMs).append(',')
-                    .append("\"success\":").append(success==null?"null":success)
+                    .append("\"success\":").append(success==null?"null":success).append(',')
+                    .append("\"client\":").append(quote(client))
                     .append("}\n");
             return b.toString();
         }
