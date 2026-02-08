@@ -317,7 +317,8 @@ public class NetworkManager {
         network.put(key, ref);
     }
     synchronized void onLeave(int key) {
-        network.remove(key);
+        ActorRef node = network.remove(key);
+        system.stop(node);
     }
     synchronized void onCrash(int key) {
         crashedNodes.add(key);

@@ -121,7 +121,7 @@ public class Node extends AbstractActor {
         }
 
         if (!operation.quorumTracker.done()) {
-            logEvent(new Outcome(updateResponseMsg.operationUid.toString(), "UPDATE", updateResponseMsg.key, -1, "INT_UPDATE_PARTIAL_QUORUM", true));
+            logEvent(new Outcome(updateResponseMsg.operationUid.toString(), "UPDATE", updateResponseMsg.key, -1, "INT_UPDATE_PARTIAL_QUORUM", true, operation.client.path().name()));
             return;
         }
 
@@ -130,7 +130,7 @@ public class Node extends AbstractActor {
             e = finishUpdateSuccess(operation);
         } else {
             finishUpdateFail(operation, "NO QUORUM");
-            e = new Outcome(updateResponseMsg.operationUid.toString(), "UPDATE", updateResponseMsg.key, -1, "DEC_UPDATE_FAIL", false);
+            e = new Outcome(updateResponseMsg.operationUid.toString(), "UPDATE", updateResponseMsg.key, -1, "DEC_UPDATE_FAIL", false, operation.client.path().name());
         }
         logEvent(e);
     }
@@ -191,7 +191,7 @@ public class Node extends AbstractActor {
             e = finishGetSuccess(operation);
         } else {
             finishGetFail(operation, "NO QUORUM");
-            e = new Outcome(operation.operationUid.toString(), "GET", operation.dataKey, -1, "DEC_GET_FAIL", false);
+            e = new Outcome(operation.operationUid.toString(), "GET", operation.dataKey, -1, "DEC_GET_FAIL", false, operation.client.path().name());
         }
         logEvent(e);
     }
@@ -201,7 +201,7 @@ public class Node extends AbstractActor {
         // guard at coordinator
         if (!acquireCoordinatorGuard(dataKey)) {
             sendNetworkDelayedMessage(self(), getSender(), new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY", operationUid, "UPDATE", dataKey));
-            return new Outcome(operationUid.toString(), "UPDATE", dataKey, -1, "INT_UPDATE_START", false);
+            return new Outcome(operationUid.toString(), "UPDATE", dataKey, -1, "INT_UPDATE_START", false, sender().path().name());
         }
 
         // check the nodes responsible for the request
@@ -223,7 +223,7 @@ public class Node extends AbstractActor {
             if (!acquireReplicaLock(dataKey)) {
                 // Busy locally -> fast fail
                 finishUpdateFail(operation, "LOCAL BUSY");
-                return new Outcome(operationUid.toString(), "UPDATE", dataKey, -1, "INT_UPDATE_START", false);
+                return new Outcome(operationUid.toString(), "UPDATE", dataKey, -1, "INT_UPDATE_START", false,  sender().path().name());
             }
             // If I got the lock -> remove myself from the recipient to avoid sending me a message
             responsibleNodesKeys.remove(this.id);
@@ -239,7 +239,7 @@ public class Node extends AbstractActor {
 
         // Start the timer
         operation.timer = scheduleTimeout(replicationParameters.T, operationUid, dataKey);
-        return new Outcome(operationUid.toString(), "UPDATE", dataKey, -1, "INT_UPDATE_START", true);
+        return new Outcome(operationUid.toString(), "UPDATE", dataKey, -1, "INT_UPDATE_START", true, sender().path().name());
     }
 
     private Outcome startUpdateAsReplica(Messages.UpdateRequestMsg updateRequestMsg) {
@@ -300,7 +300,7 @@ public class Node extends AbstractActor {
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
-        return new Outcome(operation.operationUid.toString(), "UPDATE", operation.dataKey, committedDataItem.getVersion(), "DEC_UPDATE_SUCCESS", true);
+        return new Outcome(operation.operationUid.toString(), "UPDATE", operation.dataKey, committedDataItem.getVersion(), "DEC_UPDATE_SUCCESS", true, operation.client.path().name());
     }
 
     private void finishUpdateFail(Operation operation, String reason) {
@@ -323,7 +323,7 @@ public class Node extends AbstractActor {
         OperationUid operationUid = nextOperationUid();
         if (!acquireCoordinatorGuard(dataKey)) {
             sendNetworkDelayedMessage(self(), getSender(), new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY", operationUid, "GET", dataKey));
-            return new Outcome(operationUid.toString(), "GET", dataKey, -1, "INT_GET_START", false);
+            return new Outcome(operationUid.toString(), "GET", dataKey, -1, "INT_GET_START", false, sender().path().name());
         }
         Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(network, dataKey, replicationParameters.N);
         Operation operation = new Operation(
@@ -342,7 +342,7 @@ public class Node extends AbstractActor {
             if (!acquireReplicaLock(dataKey)) {
                 // Busy locally -> fast fail
                 finishUpdateFail(operation, "LOCAL BUSY");
-                return new Outcome(operationUid.toString(), "GET", dataKey, -1, "INT_GET_START", false);
+                return new Outcome(operationUid.toString(), "GET", dataKey, -1, "INT_GET_START", false, sender().path().name());
             }
             // read my value
             operation.onOkResponse(this.id, storage.get(dataKey));
@@ -370,7 +370,7 @@ public class Node extends AbstractActor {
 
         // Start the timer
         operation.timer = scheduleTimeout(replicationParameters.T, operationUid, dataKey);
-        return new Outcome(operationUid.toString(), "GET", dataKey, -1, "INT_GET_START", true);
+        return new Outcome(operationUid.toString(), "GET", dataKey, -1, "INT_GET_START", true,  sender().path().name());
     }
 
     private Outcome performGetAsReplica(Messages.GetRequestMsg getRequestMsg) {
@@ -414,7 +414,7 @@ public class Node extends AbstractActor {
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
-        return new Outcome(operation.operationUid.toString(), "GET", operation.dataKey, chosenVersion.getVersion(), "DEC_GET_SUCCESS", true);
+        return new Outcome(operation.operationUid.toString(), "GET", operation.dataKey, chosenVersion.getVersion(), "DEC_GET_SUCCESS", true, operation.client.path().name());
     }
 
     private void finishGetFail(Operation operation, String reason) {
@@ -450,10 +450,10 @@ public class Node extends AbstractActor {
 
             if (operation.operationType.equals("UPDATE")) {
                 finishUpdateFail(operation, "TIMEOUT");
-                logEvent(new Outcome(timeout.operationUid.toString(), "UPDATE", timeout.dataKey, -1, "DEC_UPDATE_TIMEOUT", false));
+                logEvent(new Outcome(timeout.operationUid.toString(), "UPDATE", timeout.dataKey, -1, "DEC_UPDATE_TIMEOUT", false, operation.client.path().name()));
             } else if (operation.operationType.equals("GET")) {
                 finishGetFail(operation, "TIMEOUT");
-                logEvent(new Outcome(timeout.operationUid.toString(), "GET", timeout.dataKey, -1, "DEC_GET_TIMEOUT", false));
+                logEvent(new Outcome(timeout.operationUid.toString(), "GET", timeout.dataKey, -1, "DEC_GET_TIMEOUT", false, operation.client.path().name()));
             } else if (operation.operationType.equals("JOIN")) {
                 finishJoinFail(operation.operationUid, "timeout");
                 logEvent(new Outcome(timeout.operationUid.toString(), "JOIN", timeout.dataKey, -1, "DEC_JOIN_TIMEOUT", false));
@@ -535,7 +535,7 @@ public class Node extends AbstractActor {
         sendNetworkDelayedMessage(self(), sender(), responseMsg);
         boolean isRecover = bootstrapRequestMsg.isRecover;
         logEvent(new Outcome(bootstrapRequestMsg.operationUid.toString(),
-                isRecover ? "RECOVER" : "JOIN_RECOVER", -1, -1,
+                isRecover ? "RECOVER" : "JOIN", -1, -1,
                 isRecover ? "INT_RECOVER_BOOTSTRAP" : "INT_JOIN_BOOTSTRAP", true));
     }
 
@@ -646,7 +646,7 @@ public class Node extends AbstractActor {
         sendNetworkDelayedMessage(self(), sender(), responseMsg);
         boolean isRecover = readDataRequestMsg.isRecover;
         logEvent(new Outcome(readDataRequestMsg.operationUid.toString(),
-                isRecover ? "RECOVER" : "JOIN_OR_RECOVER", -1, -1,
+                isRecover ? "RECOVER" : "JOIN", -1, -1,
                 isRecover ? "INT_RECOVER_PER_KEY_REPLY" : "INT_JOIN_PER_KEY_REPLY", true));
     }
 
@@ -1408,6 +1408,7 @@ public class Node extends AbstractActor {
         public final int chosenVersion;
         public final String phase;
         public final boolean success;
+        public final String client;
 
         private Outcome(String operationUid, String operationType, int dataKey, int chosenVersion, String phase, boolean success) {
             this.operationUid = operationUid;
@@ -1416,6 +1417,17 @@ public class Node extends AbstractActor {
             this.chosenVersion = chosenVersion;
             this.phase = phase;
             this.success = success;
+            this.client = null;
+        }
+
+        private Outcome(String operationUid, String operationType, int dataKey, int chosenVersion, String phase, boolean success, String client) {
+            this.operationUid = operationUid;
+            this.operationType = operationType;
+            this.dataKey = dataKey;
+            this.chosenVersion = chosenVersion;
+            this.phase = phase;
+            this.success = success;
+            this.client = client;
         }
     }
 
@@ -1431,7 +1443,8 @@ public class Node extends AbstractActor {
                 outcome.chosenVersion,
                 outcome.phase,
                 endTime - eventStartTime,
-                outcome.success
+                outcome.success,
+                outcome.client
         );
         logger.event(e);
     }
