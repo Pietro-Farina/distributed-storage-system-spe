@@ -143,6 +143,7 @@ public class Client extends AbstractActor {
         busy = false;
 
         processNextIfIdle();
+        scheduleNext();
     }
 
     private void onGetResultMsg(Messages.GetResultMsg getResultMsg) {
@@ -178,6 +179,9 @@ public class Client extends AbstractActor {
         if (!busy) {
             return;
         }
+
+        // release
+        busy = false;
 
         System.out.printf(
                 "[Client %s] TIMEOUT! Coordinator did not respond.%n",
@@ -242,7 +246,7 @@ public class Client extends AbstractActor {
                 getSelf());
     }
 
-    private class ClientTimeout implements Serializable {}
+    private static class ClientTimeout implements Serializable {}
 
     // -------------- HELPER FUNCTION FOR LOGGING -------------- //
     private void onStartOperation() {

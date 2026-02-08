@@ -329,10 +329,42 @@ public class Messages {
     }
 
     // ------------ HELPERS FOR HAVING UPDATED RING ON DATA MANAGER ------------ //
-    public static final class ManagerNotifyJoin  implements Serializable { public final int nodeKey; public ManagerNotifyJoin(int k){nodeKey = k;} }
-    public static final class ManagerNotifyLeave implements Serializable { public final int nodeKey; public ManagerNotifyLeave(int k){nodeKey = k;} }
-    public static final class ManagerNotifyCrash implements Serializable { public final int nodeKey; public ManagerNotifyCrash(int k){nodeKey = k;} }
-    public static final class ManagerNotifyRecover implements Serializable { public final int nodeKey; public ManagerNotifyRecover(int k){nodeKey = k;} }
+    public static final class ManagerNotifyJoin  implements Serializable {
+        public final int nodeKey;
+        public final boolean success;
+
+        public ManagerNotifyJoin(int k, boolean success) {
+            nodeKey = k;
+            this.success = success;
+        }
+    }
+    public static final class ManagerNotifyLeave implements Serializable {
+        public final int nodeKey;
+        public final boolean success;
+
+        public ManagerNotifyLeave(int k, boolean success) {
+            nodeKey = k;
+            this.success = success;
+        }
+    }
+    public static final class ManagerNotifyCrash implements Serializable {
+        public final int nodeKey;
+        public final boolean success;
+
+        public ManagerNotifyCrash(int k, boolean success) {
+            nodeKey = k;
+            this.success = success;
+        }
+    }
+    public static final class ManagerNotifyRecover implements Serializable {
+        public final int nodeKey;
+        public final boolean success;
+
+        public ManagerNotifyRecover(int k, boolean success) {
+            nodeKey = k;
+            this.success = success;
+        }
+    }
 
     // ------------ MESSAGES FOR EXPERIMENT COORDINATOR ------------ //
     public static class PauseOperationsMsg implements Serializable {}

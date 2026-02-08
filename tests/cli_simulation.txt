@@ -29,7 +29,7 @@ sleep 200
 
 simulation start
 
-sleep 100000
+sleep 20000
 
 simulation end
 

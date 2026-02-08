@@ -1387,23 +1387,21 @@ public class Node extends AbstractActor {
         );
         logger.summary(s);
         // ------ NOTIFY THE MANAGER ----------------------------------------------------------- //
-        if (success) {
-            if (operationType.equals("JOIN")) {
-                getContext().actorSelection("/user/networkManagerInbox").tell(
-                        new Messages.ManagerNotifyJoin(this.id), self());
-            }
-            else if (operationType.equals("LEAVE")) {
-                getContext().actorSelection("/user/networkManagerInbox").tell(
-                        new Messages.ManagerNotifyLeave(this.id), self());
-            }
-            else if (operationType.equals("CRASH")) {
-                getContext().actorSelection("/user/networkManagerInbox").tell(
-                        new Messages.ManagerNotifyCrash(this.id), self());
-            }
-            else if (operationType.equals("RECOVER")) {
-                getContext().actorSelection("/user/networkManagerInbox").tell(
-                        new Messages.ManagerNotifyRecover(this.id), self());
-            }
+        if (operationType.equals("JOIN")) {
+            getContext().actorSelection("/user/networkManagerInbox").tell(
+                    new Messages.ManagerNotifyJoin(this.id, success), self());
+        }
+        else if (operationType.equals("LEAVE")) {
+            getContext().actorSelection("/user/networkManagerInbox").tell(
+                    new Messages.ManagerNotifyLeave(this.id, success), self());
+        }
+        else if (operationType.equals("CRASH")) {
+            getContext().actorSelection("/user/networkManagerInbox").tell(
+                    new Messages.ManagerNotifyCrash(this.id, success), self());
+        }
+        else if (operationType.equals("RECOVER")) {
+            getContext().actorSelection("/user/networkManagerInbox").tell(
+                    new Messages.ManagerNotifyRecover(this.id, success), self());
         }
         // ------------------------------------------------------------------------------------- //
     }

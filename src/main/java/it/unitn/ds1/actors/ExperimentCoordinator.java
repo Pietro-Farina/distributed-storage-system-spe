@@ -99,6 +99,10 @@ public class ExperimentCoordinator extends AbstractActor {
                 ),
                 self()
         );
+
+        System.out.printf(
+                "[ExperimentCoordinator] Starting membership operation%n"
+        );
     }
 
     // Fixed maintenance schedule
@@ -111,6 +115,10 @@ public class ExperimentCoordinator extends AbstractActor {
                 new IssueMembershipOperation(),
                 getContext().system().dispatcher(),
                 getSelf()
+        );
+
+        System.out.printf(
+                "[ExperimentCoordinator] Scheduling membership operation%n"
         );
     }
 
@@ -129,6 +137,10 @@ public class ExperimentCoordinator extends AbstractActor {
         multicastMessageToClients(
                 currentClients.keySet(),
                 new Messages.PauseOperationsMsg()
+        );
+
+        System.out.printf(
+                "[ExperimentCoordinator] Starting maintenance phase%n"
         );
     }
 
@@ -193,6 +205,10 @@ public class ExperimentCoordinator extends AbstractActor {
 
         // set the new timed operation
         scheduleNextMembership();
+
+        System.out.printf(
+                "[ExperimentCoordinator] Resuming client operations%n"
+        );
     }
 
     private void multicastMessageToClients(Set<String> recipientNodes, Serializable msg) {
@@ -202,7 +218,7 @@ public class ExperimentCoordinator extends AbstractActor {
         }
     }
 
-    private class IssueMembershipOperation implements Serializable {}
+    private static class IssueMembershipOperation implements Serializable {}
 
     @Override
     public Receive createReceive() {

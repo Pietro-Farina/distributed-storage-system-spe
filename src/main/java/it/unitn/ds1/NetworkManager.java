@@ -105,6 +105,7 @@ public class NetworkManager {
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "JOIN", newNodeKey, "network not initialized"
             );
+            notifyExperimentCoordinator("JOIN", newNodeKey, false);
             return;
         }
         if (network.containsKey(newNodeKey)) {
@@ -112,6 +113,7 @@ public class NetworkManager {
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "JOIN", newNodeKey, "node already exists in network"
             );
+            notifyExperimentCoordinator("JOIN", newNodeKey, false);
             return;
         }
         if (!network.containsKey(bootstrapNodeKey)) {
@@ -119,6 +121,7 @@ public class NetworkManager {
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "JOIN", newNodeKey, "bootstrap node not in network"
             );
+            notifyExperimentCoordinator("JOIN", newNodeKey, false);
             return;
         }
         ActorRef newNode = system.actorOf(Node.props(newNodeKey, parameters.replication, parameters.delays, parameters.random.seed), "node_" + newNodeKey);
@@ -131,6 +134,7 @@ public class NetworkManager {
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "LEAVE", nodeKey, "network not initialized"
             );
+            notifyExperimentCoordinator("LEAVE", nodeKey, false);
             return;
         }
         if (!network.containsKey(nodeKey)) {
@@ -138,6 +142,7 @@ public class NetworkManager {
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "LEAVE", nodeKey, "node not in network"
             );
+            notifyExperimentCoordinator("LEAVE", nodeKey, false);
             return;
         }
         ActorRef node = network.get(nodeKey);
@@ -150,6 +155,7 @@ public class NetworkManager {
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "CRASH", nodeKey, "network not initialized"
             );
+            notifyExperimentCoordinator("CRASH", nodeKey, false);
             return;
         }
         if (!network.containsKey(nodeKey)) {
@@ -157,6 +163,7 @@ public class NetworkManager {
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "CRASH", nodeKey, "node not in network"
             );
+            notifyExperimentCoordinator("CRASH", nodeKey, false);
             return;
         }
         if (crashedNodes.contains(nodeKey)) {
@@ -164,6 +171,7 @@ public class NetworkManager {
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "RECOVER", nodeKey, "node already crashed"
             );
+            notifyExperimentCoordinator("CRASH", nodeKey, false);
             return;
         }
         ActorRef node = network.get(nodeKey);
@@ -176,6 +184,7 @@ public class NetworkManager {
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "RECOVER", nodeKey, "network not initialized"
             );
+            notifyExperimentCoordinator("RECOVER", nodeKey, false);
             return;
         }
         if (!network.containsKey(nodeKey)) {
@@ -183,6 +192,7 @@ public class NetworkManager {
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "RECOVER", nodeKey, "node not in network"
             );
+            notifyExperimentCoordinator("RECOVER", nodeKey, false);
             return;
         }
         if (!crashedNodes.contains(nodeKey)) {
@@ -190,6 +200,7 @@ public class NetworkManager {
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "RECOVER", nodeKey, "node not crashed"
             );
+            notifyExperimentCoordinator("RECOVER", nodeKey, false);
             return;
         }
         if (!network.containsKey(bootstrapNodeKey)) {
@@ -197,6 +208,7 @@ public class NetworkManager {
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "RECOVER", bootstrapNodeKey, "bootstrap node [" + bootstrapNodeKey +"] not in network"
             );
+            notifyExperimentCoordinator("RECOVER", nodeKey, false);
             return;
         }
         ActorRef node = network.get(nodeKey);
@@ -356,22 +368,30 @@ public class NetworkManager {
      */
 
     // called only by the inbox actor (single-threaded), but keep synchronized for safety
-    synchronized void onJoin(int key, ActorRef ref) {
-        network.put(key, ref);
-        notifyExperimentCoordinator("JOIN", key, true);
+    synchronized void onJoin(int key, ActorRef ref, boolean success) {
+        if (success) {
+            network.put(key, ref);
+        }
+        notifyExperimentCoordinator("JOIN", key, success);
     }
-    synchronized void onLeave(int key) {
-        ActorRef node = network.remove(key);
-        system.stop(node);
-        notifyExperimentCoordinator("LEAVE", key, true);
+    synchronized void onLeave(int key, boolean success) {
+        if (success) {
+            ActorRef node = network.remove(key);
+            system.stop(node);
+        }
+        notifyExperimentCoordinator("LEAVE", key, success);
     }
-    synchronized void onCrash(int key) { /* keep membership; optionally track a status map */
-        crashedNodes.add(key);
-        notifyExperimentCoordinator("CRASH", key, true);
+    synchronized void onCrash(int key, boolean success) { /* keep membership; optionally track a status map */
+        if (success) {
+            crashedNodes.add(key);
+        }
+        notifyExperimentCoordinator("CRASH", key, success);
     }
-    synchronized void onRecover(int key, ActorRef ref) {
-        crashedNodes.remove(key);
-        notifyExperimentCoordinator("RECOVER", key, true);
+    synchronized void onRecover(int key, boolean success) {
+        if (success) {
+            crashedNodes.remove(key);
+        }
+        notifyExperimentCoordinator("RECOVER", key, success);
     }
 
     synchronized void onRequestMembershipOperationMsg(Messages.RequestMembershipOperationMsg msg) {
@@ -381,10 +401,13 @@ public class NetworkManager {
             case "RECOVER" -> recoverNode(msg.nodeKey, msg.bootstrapNodeKey);
             case "CRASH" -> crashNode(msg.nodeKey);
             case "TERMINATE_EXPERIMENT" -> {}
-            default -> System.out.printf(
-                    "[Network Manager] %s Operation failed: %s%n",
-                    msg.operationType, "operation not supported"
-            );
+            default -> {
+                System.out.printf(
+                        "[Network Manager] %s Operation failed: %s%n",
+                        msg.operationType, "operation not supported"
+                );
+                notifyExperimentCoordinator("UNKNOWN", -1, false);
+            }
         }
     }
 
@@ -403,10 +426,10 @@ public class NetworkManager {
 
         @Override public Receive createReceive(){
             return receiveBuilder()
-                    .match(Messages.ManagerNotifyJoin.class,m -> networkManager.onJoin(m.nodeKey, sender()))
-                    .match(Messages.ManagerNotifyLeave.class,m -> networkManager.onLeave(m.nodeKey))
-                    .match(Messages.ManagerNotifyCrash.class,m -> networkManager.onCrash(m.nodeKey))
-                    .match(Messages.ManagerNotifyRecover.class,m -> networkManager.onRecover(m.nodeKey, sender()))
+                    .match(Messages.ManagerNotifyJoin.class,m -> networkManager.onJoin(m.nodeKey, sender(), m.success))
+                    .match(Messages.ManagerNotifyLeave.class,m -> networkManager.onLeave(m.nodeKey, m.success))
+                    .match(Messages.ManagerNotifyCrash.class,m -> networkManager.onCrash(m.nodeKey, m.success))
+                    .match(Messages.ManagerNotifyRecover.class,m -> networkManager.onRecover(m.nodeKey, m.success))
                     .match(Messages.RequestMembershipOperationMsg.class, networkManager::onRequestMembershipOperationMsg)
                     .build();
         }
