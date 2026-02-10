@@ -48,9 +48,9 @@ public class NetworkManager {
         // Add nodes to the system and create the same numbers of client (for bulk updates)
         int i = 0;
         for (Integer nodeKey : nodeKeysToAdd) {
-            network.put(nodeKey, system.actorOf(Node.props(nodeKey, parameters.replication, parameters.delays, parameters.random.seed), "node_" + nodeKey));
-            String clientName =  "client" + ++i;
-            clients.put(clientName, system.actorOf(Client.props(parameters.delays, parameters.replication, experimentCoordinator, parameters.random.seed, parameters), clientName));
+            network.put(nodeKey, system.actorOf(Node.props(nodeKey, parameters.replication, parameters.delays, parameters, parameters.random.seed), "node_" + nodeKey));
+            // String clientName =  "client" + ++i;
+            // clients.put(clientName, system.actorOf(Client.props(parameters.delays, parameters.replication, experimentCoordinator, parameters.random.seed, parameters), clientName));
         }
 
         // Send join messages to the nodes to inform them of the whole network
@@ -124,7 +124,7 @@ public class NetworkManager {
             notifyExperimentCoordinator("JOIN", newNodeKey, false);
             return;
         }
-        ActorRef newNode = system.actorOf(Node.props(newNodeKey, parameters.replication, parameters.delays, parameters.random.seed), "node_" + newNodeKey);
+        ActorRef newNode = system.actorOf(Node.props(newNodeKey, parameters.replication, parameters.delays, parameters, parameters.random.seed), "node_" + newNodeKey);
         newNode.tell(new Messages.StartJoinMsg(newNodeKey, network.get(bootstrapNodeKey)), ActorRef.noSender());
     }
 

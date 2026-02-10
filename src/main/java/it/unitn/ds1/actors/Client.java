@@ -10,7 +10,6 @@ import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.utils.ApplicationConfig;
 import it.unitn.ds1.utils.DistributionRandomGenerator;
 import it.unitn.ds1.utils.OperationUid;
-import scala.Array;
 import scala.concurrent.duration.Duration;
 
 import java.io.Serializable;
@@ -18,7 +17,6 @@ import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Map;
-import java.util.NavigableMap;
 import java.util.concurrent.TimeUnit;
 
 /*
@@ -77,7 +75,7 @@ public class Client extends AbstractActor {
     private void onStartUpdateMsg(Messages.StartUpdateMSg startUpdateMsg) {
         if (busy) {
             // console log error
-            System.out.printf(
+            if (parameters.log.logToConsole) System.out.printf(
                     "[Client %s] Operation not started: %s%n",
                     getSelf().path().name(), "CLIENT BUSY"
             );
@@ -109,7 +107,7 @@ public class Client extends AbstractActor {
     private void onStartGetMsg(Messages.StartGetMsg startGetMsg) {
         if (busy) {
             // console log error
-            System.out.printf(
+            if (parameters.log.logToConsole) System.out.printf(
                     "[Client %s] Operation not started: %s%n",
                     getSelf().path().name(), "CLIENT BUSY"
             );
@@ -135,7 +133,7 @@ public class Client extends AbstractActor {
     private void onUpdateResultMsg(Messages.UpdateResultMsg updateResultMsg) {
         operationTimer.cancel();
 
-        System.out.printf(
+        if (parameters.log.logToConsole) System.out.printf(
                 "[Client %s] Update completed for dataKey=%d -> value=\"%s\" (new version=%d)%n",
                 getSelf().path().name(), updateResultMsg.dataKey, updateResultMsg.value.getValue(), updateResultMsg.value.getVersion()
         );
@@ -149,7 +147,7 @@ public class Client extends AbstractActor {
     private void onGetResultMsg(Messages.GetResultMsg getResultMsg) {
         operationTimer.cancel();
 
-        System.out.printf(
+        if (parameters.log.logToConsole) System.out.printf(
                 "[Client %s] Get result: dataKey=%d -> value=\"%s\" (version=%d)%n",
                 getSelf().path().name(), getResultMsg.dataKey, getResultMsg.value.getValue(), getResultMsg.value.getVersion()
         );
@@ -163,7 +161,7 @@ public class Client extends AbstractActor {
     private void onErrorMsg(Messages.ErrorMsg errorMsg) {
         operationTimer.cancel();
 
-        System.out.printf(
+        if (parameters.log.logToConsole) System.out.printf(
                 "[Client %s] Operation failed: %s%n",
                 getSelf().path().name(), errorMsg.reason
         );
@@ -183,7 +181,7 @@ public class Client extends AbstractActor {
         // release
         busy = false;
 
-        System.out.printf(
+        if (parameters.log.logToConsole) System.out.printf(
                 "[Client %s] TIMEOUT! Coordinator did not respond.%n",
                 getSelf().path().name()
         );
@@ -217,16 +215,16 @@ public class Client extends AbstractActor {
             busy = true; opCounter++;
             Messages.UpdateRequestMsg req = new Messages.UpdateRequestMsg(m.dataKey, m.value);
             m.node.tell(req, getSelf());
-            System.out.printf("[Client %s][op %d] -> update(%d, \"%s\")%n",
+            if (parameters.log.logToConsole) System.out.printf("[Client %s][op %d] -> update(%d, \"%s\")%n",
                     getSelf().path().name(), opCounter, m.dataKey, m.value);
         } else if (intent instanceof Messages.StartGetMsg m) {
             busy = true; opCounter++;
             Messages.GetRequestMsg req = new Messages.GetRequestMsg(m.dataKey);
             m.node.tell(req, getSelf());
-            System.out.printf("[Client %s][op %d] -> get(%d)%n",
+            if (parameters.log.logToConsole) System.out.printf("[Client %s][op %d] -> get(%d)%n",
                     getSelf().path().name(), opCounter, m.dataKey);
         } else {
-            System.out.printf("[Client %s] !! Unknown intent type: %s%n",
+            if (parameters.log.logToConsole) System.out.printf("[Client %s] !! Unknown intent type: %s%n",
                     getSelf().path().name(), intent.getClass().getSimpleName());
         }
     }
@@ -280,10 +278,10 @@ public class Client extends AbstractActor {
         }
 
         // choose key
-        int dataKey = random.zipf(parameters.ring.keySpace, 1.0);
+        int dataKey = random.zipf(parameters.ring.keySpace, parameters.random.zipfSkew);
 
         // choose operation
-        boolean isRead = random.bernoulli(0.7);
+        boolean isRead = random.bernoulli(parameters.random.readP);
 
         // choose node
         Integer[] nodeKeys = currentNodes.keySet().toArray(new Integer[0]);
@@ -294,7 +292,7 @@ public class Client extends AbstractActor {
         ActorRef node = currentNodes.get(nodeKey);
 
         // choose delay
-        double lambdaOpsPerSec = 1.0;              // example: 1 op / second / client
+        double lambdaOpsPerSec = parameters.random.lambdaPerSec;              // example: 1 op / second / client
         double lambdaPerMs = lambdaOpsPerSec / 1000.0;
 
         long delayMs = random.poissonInterArrivalMs(lambdaPerMs, /*min*/ 1L, /*max*/ 2000L);
@@ -335,7 +333,8 @@ public class Client extends AbstractActor {
      * @param message
      */
     private void sendNetworkDelayedMessage(ActorRef sender, ActorRef receiver, Serializable message) {
-        long delayMs = random.shiftedExponentialDelayMs(5L, 1.0/15.0, 2000L);
+        long delayMs = random.shiftedExponentialDelayMs(delaysParameters.shiftMs, delaysParameters.lambdaPerMs, delaysParameters.tailMs);
+        // long delayMs = random.shiftedExponentialDelayMs(5L, 1.0/15.0, 2000L);
         getContext().system().scheduler().scheduleOnce(
                 Duration.create(delayMs, TimeUnit.MILLISECONDS),
                 receiver,

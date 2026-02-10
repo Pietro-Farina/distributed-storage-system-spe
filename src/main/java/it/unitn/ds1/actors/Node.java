@@ -25,6 +25,7 @@ public class Node extends AbstractActor {
     // --------- PARAMETERS FOR QUORUM AND DELAYS OF THE NETWORK ---------
     private final ApplicationConfig.Replication replicationParameters;
     private final ApplicationConfig.Delays delaysParameters;
+    private final ApplicationConfig parameters;
 
     // The network ring <nodeKey, ActorRef>
     private final NavigableMap<Integer, ActorRef> network;
@@ -60,11 +61,12 @@ public class Node extends AbstractActor {
     public Node(
             int id,
             ApplicationConfig.Replication replicationParameters,
-            ApplicationConfig.Delays delaysParameters,
+            ApplicationConfig.Delays delaysParameters, ApplicationConfig parameters,
             long runSeed){
         this.id = id;
         this.replicationParameters = replicationParameters;
         this.delaysParameters = delaysParameters;
+        this.parameters = parameters;
 
         this.network = new TreeMap<>();
         this.storage = new TreeMap<>();
@@ -80,9 +82,9 @@ public class Node extends AbstractActor {
     }
 
     static public Props props(
-            int id, ApplicationConfig.Replication replicationParameters, ApplicationConfig.Delays delaysParameters, long runSeed) {
+            int id, ApplicationConfig.Replication replicationParameters, ApplicationConfig.Delays delaysParameters, ApplicationConfig parameters, long runSeed) {
         return Props.create(Node.class, () -> new Node(
-                id, replicationParameters, delaysParameters,  runSeed));
+                id, replicationParameters, delaysParameters, parameters, runSeed));
     }
 
     private void onJoinNetworkMsg(Messages.JoinNetworkMsg joinNetworkMsg) {
@@ -1191,7 +1193,8 @@ public class Node extends AbstractActor {
      * @param message
      */
     private void sendNetworkDelayedMessage(ActorRef sender, ActorRef receiver, Serializable message) {
-        long delayMs = random.shiftedExponentialDelayMs(5L, 1.0/15.0, 2000L);
+//        long delayMs = random.shiftedExponentialDelayMs(5L, 1.0/15.0, 2000L);
+        long delayMs = random.shiftedExponentialDelayMs(delaysParameters.shiftMs, delaysParameters.lambdaPerMs, delaysParameters.tailMs);
         getContext().system().scheduler().scheduleOnce(
                 Duration.create(delayMs, TimeUnit.MILLISECONDS),
                 receiver,
@@ -1435,11 +1438,10 @@ public class Node extends AbstractActor {
         }
     }
 
-    // TODO move runID to the configuration parameter
     private void logEvent(Outcome outcome) {
         long endTime = System.nanoTime();
         var e = new LogModels.Event(
-                "TODO",
+                parameters.log.runID,
                 this.id,
                 outcome.operationUid,
                 outcome.operationType,

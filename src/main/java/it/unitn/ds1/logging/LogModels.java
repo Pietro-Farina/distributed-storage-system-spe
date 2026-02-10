@@ -125,21 +125,40 @@ public class LogModels {
         // Replication and Quorum
         public final int N; public final int R; public final int W; public final int T;
         public final long delayMinMs; public final long delayMaxMs; // Simulated network delay bounds
+        public final long shiftMs, tailMs;
+        public final double exponentialLambdaPerMs;
+        public final int keySpace;
+        public final long membershipScheduling;
+        public final int nrNodes, nrClients;
         public final long seed;             // Random seed used
+        public final double zipfSkew;
+        public final double readP;
+        public final double poissonLambdaOpsPerSec;
         // public final String ringStart;   // Track node membership / ring layout
         // public final String ringEnd;     // Track node membership / ring layout
         public final String jvm;            // Java runtime version
 
         public Metadata(String startedAtIso, String runId, String runTag,
                         int N, int R, int W, int T,
-                        long delayMinMs, long delayMaxMs, long seed,
+                        long delayMinMs, long delayMaxMs, long shiftMs, long tailMs, double exponentialLambdaPerMs, int keySpace, long membershipScheduling, int nrNodes, int nrClients, long seed, double zipfSkew, double readP, double poissonLambdaOpsPerSec,
                         String jvm
                         ) {
             this.startedAtIso = startedAtIso;
             this.runId = runId;
             this.runTag = runTag;
             this.N = N; this.R = R; this.W = W; this.T = T;
-            this.delayMinMs = delayMinMs; this.delayMaxMs = delayMaxMs; this.seed = seed;
+            this.delayMinMs = delayMinMs; this.delayMaxMs = delayMaxMs;
+            this.shiftMs = shiftMs;
+            this.tailMs = tailMs;
+            this.exponentialLambdaPerMs = exponentialLambdaPerMs;
+            this.keySpace = keySpace;
+            this.membershipScheduling = membershipScheduling;
+            this.nrNodes = nrNodes;
+            this.nrClients = nrClients;
+            this.seed = seed;
+            this.zipfSkew = zipfSkew;
+            this.readP = readP;
+            this.poissonLambdaOpsPerSec = poissonLambdaOpsPerSec;
             this.jvm = jvm;
         }
 
@@ -156,7 +175,17 @@ public class LogModels {
                     .append(indent).append("\"T\": ").append(T).append(",\n")
                     .append(indent).append("\"delayMinMs\": ").append(delayMinMs).append(",\n")
                     .append(indent).append("\"delayMaxMs\": ").append(delayMaxMs).append(",\n")
+                    .append(indent).append("\"shiftMs\": ").append(shiftMs).append(",\n")
+                    .append(indent).append("\"tailMs\": ").append(tailMs).append(",\n")
+                    .append(indent).append("\"exponentialLambdaPerMs\": ").append(exponentialLambdaPerMs).append(",\n")
+                    .append(indent).append("\"keySpace\": ").append(keySpace).append(",\n")
+                    .append(indent).append("\"membershipScheduling\": ").append(membershipScheduling).append(",\n")
+                    .append(indent).append("\"nrNodes\": ").append(nrNodes).append(",\n")
+                    .append(indent).append("\"nrClients\": ").append(nrClients).append(",\n")
                     .append(indent).append("\"seed\": ").append(seed).append(",\n")
+                    .append(indent).append("\"zipfSkew\": ").append(zipfSkew).append(",\n")
+                    .append(indent).append("\"readP\": ").append(readP).append(",\n")
+                    .append(indent).append("\"poissonLambdaOpsPerSec\": ").append(poissonLambdaOpsPerSec).append(",\n")
 //   .append(indent).append("\"ringSummary\": ").append(quote(ringSummary)).append(",\n")
 //   .append(indent).append("\"gitSha\": ").append(quote(gitSha)).append(",\n")
                     .append(indent).append("\"jvm\": ").append(quote(jvm)).append("\n")

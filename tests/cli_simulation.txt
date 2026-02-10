@@ -11,7 +11,7 @@ sleep 200
 ########################################
 
 # Initialize the network with three nodes
-init 10 20 30 40 50
+init 5 10 15 20 25 30 35 40 45 50
 
 sleep 500
 
@@ -24,12 +24,28 @@ client create client1
 client create client2
 client create client3
 client create client4
+client create client5
+client create client6
+client create client7
+client create client8
+client create client9
+client create client10
+client create client11
+client create client12
+client create client13
+client create client14
+client create client15
+client create client16
+client create client17
+client create client18
+client create client19
+client create client20
 
 sleep 200
 
 simulation start
 
-sleep 20000
+sleep 300000
 
 simulation end
 

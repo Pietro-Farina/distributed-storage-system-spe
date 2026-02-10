@@ -75,17 +75,25 @@ public class ApplicationConfig {
     }
 
     public static final class Delays {
-        public final long delayMinMs, delayMaxMs;
-        private Delays(long min, long max) { this.delayMinMs = min; this.delayMaxMs = max; }
+        public final long delayMinMs, delayMaxMs, shiftMs, tailMs;
+        public final double lambdaPerMs;
+        private Delays(long min, long max, long shiftMs, long tailMs, double lambdaPerMs) {
+            this.delayMinMs = min; this.delayMaxMs = max; this.shiftMs = shiftMs; this.tailMs = tailMs;
+            this.lambdaPerMs = lambdaPerMs; }
         public static Delays from(Config c) {
-            return new Delays(c.getLong("delayMinMs"), c.getLong("delayMaxMs"));
+            return new Delays(c.getLong("delayMinMs"), c.getLong("delayMaxMs"), c.getLong("shiftMs"), c.getLong("tailMs"), c.getDouble("exponentialLambdaPerMsNumerator") / c.getDouble("exponentialLambdaPerMsDenominator"));
         }
     }
 
     public static final class Ring {
         public final int keySpace;
-        private Ring(int keySpace) { this.keySpace = keySpace; }
-        public static Ring from(Config c) { return new Ring(c.getInt("keySpace")); }
+        public final long membershipScheduling;
+        public final int nrNodes, nrClients;
+        private Ring(int keySpace, long membershipScheduling, int nrNodes, int nrClients) { this.keySpace = keySpace; this.membershipScheduling = membershipScheduling;
+            this.nrNodes = nrNodes;
+            this.nrClients = nrClients;
+        }
+        public static Ring from(Config c) { return new Ring(c.getInt("keySpace"), c.getInt("membershipScheduling"), c.getInt("nrNodes"), c.getInt("nrClients") ); }
     }
 
     public static final class Paths {
@@ -96,8 +104,9 @@ public class ApplicationConfig {
 
     public static final class RandomSeed {
         public final long seed;
-        private RandomSeed(long seed) { this.seed = seed; }
-        public static RandomSeed from(Config c) { return new RandomSeed(c.getLong("seed")); }
+        public final double zipfSkew, readP, lambdaPerSec;
+        private RandomSeed(long seed, double zipfSkew, double readP, double lambdaPerSec) { this.seed = seed; this.zipfSkew = zipfSkew;  this.readP = readP; this.lambdaPerSec = lambdaPerSec; }
+        public static RandomSeed from(Config c) { return new RandomSeed(c.getLong("seed"), c.getDouble("zipfSkew"), c.getDouble("readP"), c.getDouble("poissonLambdaOpsPerSec")); }
     }
 
     public static final class Log {
@@ -108,9 +117,10 @@ public class ApplicationConfig {
         public final int batchSize;
         public final Duration flushEvery;
         public final boolean logToConsole, writeParanoid;
+        public final String runID;
 
         private Log(LoggerConfig.EventDetail ed, String runTag, boolean summaryEnabled, double eventSample,
-                    int batchSize, Duration flushEvery, boolean logToConsole, boolean writeParanoid) {
+                    int batchSize, Duration flushEvery, boolean logToConsole, boolean writeParanoid, String runID) {
             this.eventDetail = Objects.requireNonNull(ed);
             this.runTag = runTag;
             this.summaryEnabled = summaryEnabled;
@@ -119,6 +129,7 @@ public class ApplicationConfig {
             this.flushEvery = flushEvery;
             this.logToConsole = logToConsole;
             this.writeParanoid = writeParanoid;
+            this.runID = runID;
         }
 
         public static Log from(Config c) {
@@ -130,7 +141,8 @@ public class ApplicationConfig {
                     c.getInt("batchSize"),
                     Duration.ofMillis(c.getInt("flushEvery")),
                     c.getBoolean("logToConsole"),
-                    c.getBoolean("writeParanoid")
+                    c.getBoolean("writeParanoid"),
+                    c.getString("runID")
             );
         }
     }

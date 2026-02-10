@@ -2,16 +2,11 @@ package it.unitn.ds1;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import akka.actor.ActorRef;
-import akka.actor.ActorSystem;
-import it.unitn.ds1.actors.Client;
-import it.unitn.ds1.actors.Node;
 import it.unitn.ds1.cli.Cli;
 import it.unitn.ds1.cli.CommandExecutor;
 import it.unitn.ds1.logging.AsyncRunLogger;
 import it.unitn.ds1.logging.LogModels;
 import it.unitn.ds1.logging.LoggerConfig;
-import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.utils.ApplicationConfig;
 
 import java.io.FileReader;
@@ -56,7 +51,10 @@ public class Main {
                 "test1",      // not used; kept for completeness
                 loggerCfg.runTag,
                 cfg.replication.N, cfg.replication.R, cfg.replication.W, (int) cfg.replication.T,                  // your run params
-                10, 10, 4242,
+                10, 10,
+                cfg.delays.shiftMs, cfg.delays.tailMs, cfg.delays.lambdaPerMs,
+                cfg.ring.keySpace, cfg.ring.membershipScheduling, cfg.ring.nrNodes, cfg.ring.nrClients,
+                cfg.random.seed, cfg.random.zipfSkew, cfg.random.readP, cfg.random.lambdaPerSec,
                 System.getProperty("java.version")
         );
         var logger = AsyncRunLogger.start(loggerCfg, meta);

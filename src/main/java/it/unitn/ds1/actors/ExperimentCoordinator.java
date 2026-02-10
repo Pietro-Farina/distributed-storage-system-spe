@@ -107,7 +107,7 @@ public class ExperimentCoordinator extends AbstractActor {
 
     // Fixed maintenance schedule
     private void scheduleNextMembership() {
-        long maintenanceDelay = 120_000L;
+        long maintenanceDelay = parameters.ring.membershipScheduling;
 
         getContext().system().scheduler().scheduleOnce(
                 Duration.create(maintenanceDelay, TimeUnit.MILLISECONDS),
