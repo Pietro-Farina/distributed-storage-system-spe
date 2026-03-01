@@ -3,12 +3,15 @@ package it.unitn.ds1.actors;
 import akka.actor.AbstractActor;
 import akka.actor.ActorRef;
 import akka.actor.Props;
+import it.unitn.ds1.logging.AsyncRunLogger;
+import it.unitn.ds1.logging.LogModels;
 import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.utils.ApplicationConfig;
 import it.unitn.ds1.utils.DistributionRandomGenerator;
 import scala.concurrent.duration.Duration;
 
 import java.io.Serializable;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
@@ -21,6 +24,9 @@ public class ExperimentCoordinator extends AbstractActor {
     private final Set<Integer> crashedNodes;
     private final Set<String> idleClients;
     private boolean running;
+    private boolean scheduled;
+    private int ops;
+    private final AsyncRunLogger logger = AsyncRunLogger.get();
 
     // used to track the scheduled maintenance phase
     private boolean maintenance;
@@ -41,9 +47,12 @@ public class ExperimentCoordinator extends AbstractActor {
         this.idleClients = new HashSet<>();
         this.maintenance = false;
         this.random = new DistributionRandomGenerator(runSeed, self().path().name());
+        this.ops = 0;
     }
 
     private void onSystemQuiescent() {
+        ops++;
+        System.out.println("System quiescent");
         // sample the operation
         Set<String> operationType = new HashSet<>();
         operationType.add("CRASH");
@@ -75,7 +84,7 @@ public class ExperimentCoordinator extends AbstractActor {
             Integer[] nodeKeys = currentNodes.keySet().stream()
                     .filter(key -> !key.equals(finalNodeKey))
                     .toArray(Integer[]::new);
-            bootstrapNodeKey = nodeKeys[random.uniformInt(currentNodes.size())];
+            bootstrapNodeKey = nodeKeys[random.uniformInt(nodeKeys.length)];
         } else if (selectedOperation.equals("JOIN")) { // must be an inactive node + boostrap
             int[] inactiveKeys = IntStream.range(0, parameters.ring.keySpace)
                     .filter(key -> !currentNodes.containsKey(key))
@@ -120,6 +129,7 @@ public class ExperimentCoordinator extends AbstractActor {
         System.out.printf(
                 "[ExperimentCoordinator] Scheduling membership operation%n"
         );
+        this.scheduled = true;
     }
 
     // On scheduled maintenance phase
@@ -128,6 +138,7 @@ public class ExperimentCoordinator extends AbstractActor {
             return;
         } else {
             maintenance = true;
+            scheduled = false;
         }
 
         // free idleClients
@@ -138,6 +149,9 @@ public class ExperimentCoordinator extends AbstractActor {
                 currentClients.keySet(),
                 new Messages.PauseOperationsMsg()
         );
+
+        // log
+        logStartMaintenance();
 
         System.out.printf(
                 "[ExperimentCoordinator] Starting maintenance phase%n"
@@ -203,12 +217,53 @@ public class ExperimentCoordinator extends AbstractActor {
                 new Messages.ResumeOperationsMsg(this.currentNodes)
         );
 
+        // if the operation started than this is an end of maintenance
+        if (ops > 0) {
+            logResumeOperations();
+        }
+
         // set the new timed operation
-        scheduleNextMembership();
+        if (!this.scheduled) {
+            scheduleNextMembership();
+        }
 
         System.out.printf(
                 "[ExperimentCoordinator] Resuming client operations%n"
         );
+    }
+
+    private void logStartMaintenance() {
+        var s = new LogModels.Summary(
+                Instant.ofEpochMilli(System.nanoTime()/1_000_000).toString(),
+                Instant.ofEpochMilli(System.nanoTime()/1_000_000).toString(),
+                "EXP_COORDINATOR_START" + (ops + 1),
+                getSender().path().name(),
+                "START_MAINTENANCE",
+                -1,
+                -1,
+                false,
+                1_000L,
+                "",
+                parameters.replication.N, parameters.replication.R, parameters.replication.W, parameters.replication.T
+        );
+        logger.summary(s);
+    }
+
+    private void logResumeOperations() {
+        var s = new LogModels.Summary(
+                Instant.ofEpochMilli(System.nanoTime()/1_000_000).toString(),
+                Instant.ofEpochMilli(System.nanoTime()/1_000_000).toString(),
+                "EXP_COORDINATOR_END" + ops,
+                getSender().path().name(),
+                "END_MAINTENANCE",
+                -1,
+                -1,
+                false,
+                1_000L,
+                "",
+                parameters.replication.N, parameters.replication.R, parameters.replication.W, parameters.replication.T
+        );
+        logger.summary(s);
     }
 
     private void multicastMessageToClients(Set<String> recipientNodes, Serializable msg) {

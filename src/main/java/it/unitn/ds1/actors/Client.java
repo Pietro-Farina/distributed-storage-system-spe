@@ -178,13 +178,23 @@ public class Client extends AbstractActor {
             return;
         }
 
-        // release
-        busy = false;
-
         if (parameters.log.logToConsole) System.out.printf(
                 "[Client %s] TIMEOUT! Coordinator did not respond.%n",
                 getSelf().path().name()
         );
+
+        // release
+        busy = false;
+
+        // If we are in maintenance, coordinator must be released
+        if (paused) {
+            experimentCoordinator.tell(new Messages.ClientIdleMsg(), getSelf());
+            return;
+        }
+
+        // Otherwise keep the workload going
+        processNextIfIdle();
+        scheduleNext();
     }
 
     // Always enqueue (for simulation purposes)

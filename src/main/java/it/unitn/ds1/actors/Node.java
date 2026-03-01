@@ -475,7 +475,7 @@ public class Node extends AbstractActor {
         } else { // I am a node
             Cancellable timer = lockTimers.remove(timeout.operationUid);
             if (timer == null) { // This is a stale timeout, the operation is already finished
-                logEvent(new Outcome(timeout.operationUid.toString(), operation.operationType, timeout.dataKey, -1, "INT_NODE_STALE_TIMEOUT", false));
+                logEvent(new Outcome(timeout.operationUid.toString(), "UPDATE", timeout.dataKey, -1, "INT_NODE_STALE_TIMEOUT", false));
                 return;
             }
             timer.cancel();
@@ -1448,7 +1448,7 @@ public class Node extends AbstractActor {
                 outcome.dataKey,
                 outcome.chosenVersion,
                 outcome.phase,
-                endTime - eventStartTime,
+                (endTime - eventStartTime) / 1_000, // from NanoSeconds to MicroSeconds
                 outcome.success,
                 outcome.client
         );
@@ -1496,6 +1496,7 @@ public class Node extends AbstractActor {
                 .match(Messages.BootstrapResponseMsg.class, this::onBootstrapResponseMsg)
                 .match(Messages.ResponseDataMsg.class, this::onResponseDataMsg)
                 .match(Messages.ReadDataResponseMsg.class, this::onReadDataResponseMsg)
+                .match(Messages.Timeout.class, this::onTimeout)
                 .build();
     }
 }

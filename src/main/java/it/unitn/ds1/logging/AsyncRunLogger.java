@@ -269,5 +269,6 @@ public class AsyncRunLogger implements AutoCloseable {
     public void close() {
         if (!closed.compareAndSet(false, true)) return;
         try { writerThread.join(2000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+        INSTANCE = null;   // ← allow next run to create a new logger
     }
 }

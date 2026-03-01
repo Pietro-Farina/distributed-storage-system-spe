@@ -103,10 +103,14 @@ public class ApplicationConfig {
     }
 
     public static final class RandomSeed {
-        public final long seed;
+        public long seed;
         public final double zipfSkew, readP, lambdaPerSec;
         private RandomSeed(long seed, double zipfSkew, double readP, double lambdaPerSec) { this.seed = seed; this.zipfSkew = zipfSkew;  this.readP = readP; this.lambdaPerSec = lambdaPerSec; }
         public static RandomSeed from(Config c) { return new RandomSeed(c.getLong("seed"), c.getDouble("zipfSkew"), c.getDouble("readP"), c.getDouble("poissonLambdaOpsPerSec")); }
+
+        public void setSeed(long seed) {
+            this.seed = seed;
+        }
     }
 
     public static final class Log {
@@ -117,7 +121,7 @@ public class ApplicationConfig {
         public final int batchSize;
         public final Duration flushEvery;
         public final boolean logToConsole, writeParanoid;
-        public final String runID;
+        public String runID;
 
         private Log(LoggerConfig.EventDetail ed, String runTag, boolean summaryEnabled, double eventSample,
                     int batchSize, Duration flushEvery, boolean logToConsole, boolean writeParanoid, String runID) {
@@ -145,5 +149,7 @@ public class ApplicationConfig {
                     c.getString("runID")
             );
         }
+
+        public void setRunID(String runID) { this.runID = runID; }
     }
 }
