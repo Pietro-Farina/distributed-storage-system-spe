@@ -15,6 +15,7 @@ public class DistributionRandomGenerator {
     private final SplittableRandom zipf;
     private final SplittableRandom expo;
     private final SplittableRandom normal; // helper stream
+    private final long keyMapSeed;
 
     // Zipf CDf
     private ZipfSampler  zipfSampler;
@@ -33,6 +34,7 @@ public class DistributionRandomGenerator {
         this.zipf     = root.split();
         this.expo     = root.split();
         this.normal   = root.split();
+        this.keyMapSeed = mix64(baseSeed + 4328172814370891876L); // constant tag, pick any fixed long
     }
 
     // -------------------- Uniform --------------------
@@ -189,7 +191,9 @@ public class DistributionRandomGenerator {
         if (zipfSampler == null || (zipfSampler.n != n || zipfSampler.s != s)) {
             zipfSampler = new ZipfSampler(n, s);
         }
-        return zipfSampler.sample(zipf);
+        int rank = zipfSampler.sample(zipf);
+        return rankToKey(rank, n);    // map rank -> scattered key
+//        return zipfSampler.sample(zipf);
     }
 
     public static final class ZipfSampler {
@@ -243,5 +247,17 @@ public class DistributionRandomGenerator {
         z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
         z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
         return z ^ (z >>> 31);
+    }
+
+    // ====== 3) add this helper (rank in [1..n] -> key in [1..n], scattered) ======
+    private int rankToKey(int rank, int keySpace) {
+        long x = mix64(keyMapSeed ^ (long) rank);
+        return (int) Math.floorMod(x, (long) keySpace) + 1; // keep keys 1..keySpace
+    }
+
+    // ====== 4) add this public method (this is what you will call from clients) ======
+    public int zipfKey(int keySpace, double skew) {
+        int rank = zipf(keySpace, skew);     // existing Zipf over ranks 1..keySpace
+        return rankToKey(rank, keySpace);    // map rank -> scattered key
     }
 }

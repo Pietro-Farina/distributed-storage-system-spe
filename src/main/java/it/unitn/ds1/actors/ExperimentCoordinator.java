@@ -160,7 +160,10 @@ public class ExperimentCoordinator extends AbstractActor {
 
     private void onClientPaused(Messages.ClientIdleMsg msg) {
         String clientId = getSender().path().name();
-        idleClients.add(clientId);
+        boolean firstTime = idleClients.add(clientId);
+        if (!firstTime) {
+            return; // we already got its notification
+        }
 
         // we can start the membership operation
         if (idleClients.size() == currentClients.size()) {
