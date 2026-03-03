@@ -80,47 +80,6 @@ public class Main {
 
         Cli.run(input, executor);
 
-
-//        // Generate N node keys (spread on the ring)
-//        int nNodes = 8;
-//        List<Integer> nodeKeysToAdd = new ArrayList<>();
-//        for (int i = 0; i < nNodes; i++) {
-//            nodeKeysToAdd.add((i + 1) * 10); // 10, 20, 30, ...
-//        }
-//
-//        // Generate M random data entries
-//        int nDataItems = 25;
-//        Map<Integer, String> dataToAdd = new LinkedHashMap<>();
-//        String[] sampleValues = {"iron", "copper", "water", "oxygen", "nickel", "rock", "dust"};
-//
-//        for (int i = 0; i < nDataItems; i++) {
-//            int key = rand.nextInt(100);                  // key in [0,100)
-//            String value = sampleValues[rand.nextInt(sampleValues.length)];
-//            dataToAdd.put(key, value + "_" + key);        // e.g., "iron_57"
-//        }
-//
-//        networkManager.initializeNetwork(nodeKeysToAdd, dataToAdd, true);
-//        Thread.sleep(5000);
-//
-//        int nodeKey = nodeKeysToAdd.getFirst();
-//        networkManager.addNode(200, nodeKey);
-//
-//        Thread.sleep(2000);
-//        System.out.println(String.format("Adding node %d to network", 200));
-//
-//        networkManager.crashNode(200);
-//
-//        Thread.sleep(2000);
-//        System.out.println(String.format("Crashing node %d to network", 200));
-//
-//        networkManager.recoverNode(200, nodeKey);
-//
-//        Thread.sleep(1000);
-//        System.out.println(String.format("Recovering node %d to network", 200));
-//
-//        networkManager.removeNode(200);
-//        System.out.println(String.format("Removing node %d from network", 200));
-
         networkManager.terminate();
     }
 }
